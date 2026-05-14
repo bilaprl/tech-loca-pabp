@@ -109,6 +109,7 @@ export default function GlobalModal({ event, onClose, navigateTo }) {
   if (!event) return null;
 
   const isFull = event.quota === 0;
+  const isExpired = new Date(event.date) < new Date();
 
   const eventDateObj = new Date(event.date);
   const formattedDate = eventDateObj.toLocaleDateString("id-ID", {
@@ -144,7 +145,7 @@ export default function GlobalModal({ event, onClose, navigateTo }) {
             <>
               <img
                 src={event.image_url || "/placeholder-event.jpg"}
-                className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+                className={`w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 ${isExpired ? "grayscale-[0.5]" : ""}`}
                 alt="Poster"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-dark/80 via-dark/20 to-transparent"></div>
@@ -158,6 +159,7 @@ export default function GlobalModal({ event, onClose, navigateTo }) {
                 style={{ border: 0 }}
                 allowFullScreen=""
                 loading="lazy"
+                title="Map"
               ></iframe>
             </div>
           )}
@@ -214,25 +216,37 @@ export default function GlobalModal({ event, onClose, navigateTo }) {
 
           <div className="grid grid-cols-2 gap-4 mb-8">
             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex gap-3 items-center">
-              <span className="material-icons-round text-brand-500 bg-white p-2 rounded-xl shadow-sm">
+              <span
+                className={`material-icons-round bg-white p-2 rounded-xl shadow-sm ${isExpired ? "text-slate-400" : "text-brand-500"}`}
+              >
                 calendar_month
               </span>
               <div>
                 <p className="text-[10px] font-bold text-slate-400 uppercase">
                   Tanggal
                 </p>
-                <p className="text-sm font-bold text-dark">{formattedDate}</p>
+                <p
+                  className={`text-sm font-bold ${isExpired ? "text-slate-400" : "text-dark"}`}
+                >
+                  {formattedDate}
+                </p>
               </div>
             </div>
             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex gap-3 items-center">
-              <span className="material-icons-round text-rose-500 bg-white p-2 rounded-xl shadow-sm">
+              <span
+                className={`material-icons-round bg-white p-2 rounded-xl shadow-sm ${isExpired ? "text-slate-400" : "text-rose-500"}`}
+              >
                 schedule
               </span>
               <div>
                 <p className="text-[10px] font-bold text-slate-400 uppercase">
                   Waktu
                 </p>
-                <p className="text-sm font-bold text-dark">{formattedTime}</p>
+                <p
+                  className={`text-sm font-bold ${isExpired ? "text-slate-400" : "text-dark"}`}
+                >
+                  {formattedTime}
+                </p>
               </div>
             </div>
           </div>
@@ -251,25 +265,44 @@ export default function GlobalModal({ event, onClose, navigateTo }) {
 
           <div className="mt-auto pt-6 border-t border-slate-100">
             <button
-              disabled={isFull && !bookingSuccess}
+              disabled={(isFull || isExpired) && !bookingSuccess}
               onClick={handleBooking}
               className={`w-full py-4 px-6 rounded-2xl font-bold transition-all duration-300 flex items-center justify-center gap-3 shadow-lg 
                 ${
                   bookingSuccess
                     ? "bg-emerald-500 hover:bg-emerald-600 text-white"
-                    : isFull
-                      ? "bg-slate-100 text-slate-400"
+                    : isFull || isExpired
+                      ? "bg-slate-100 text-slate-400 cursor-not-allowed shadow-none"
                       : "bg-brand-600 hover:bg-brand-500 text-white shadow-brand-500/30"
                 }`}
             >
+              <span className="material-icons-round text-sm">
+                {isBooking
+                  ? "sync"
+                  : bookingSuccess
+                    ? "confirmation_number"
+                    : isExpired
+                      ? "event_busy"
+                      : isFull
+                        ? "block"
+                        : "local_activity"}
+              </span>
               {isBooking
                 ? "Memproses..."
                 : bookingSuccess
                   ? "Lihat Status Tiket"
-                  : isFull
-                    ? "Kuota Penuh"
-                    : "Amankan Slot Sekarang"}
+                  : isExpired
+                    ? "Event Telah Selesai"
+                    : isFull
+                      ? "Kuota Penuh"
+                      : "Amankan Slot Sekarang"}
             </button>
+
+            {(isExpired || isFull) && !bookingSuccess && (
+              <p className="text-center text-[10px] font-bold text-rose-500 uppercase mt-3 tracking-widest animate-pulse">
+                Pendaftaran sudah tidak tersedia
+              </p>
+            )}
           </div>
         </div>
       </div>

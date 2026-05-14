@@ -130,6 +130,56 @@ export default function Dashboard() {
     fetchDashboardData();
   }, []);
 
+  // --- LOGIKA QR SCANNER (PERBAIKAN: DIPINDAHKAN KE TOP LEVEL) ---
+  useEffect(() => {
+    let scanner = null;
+    if (
+      activeTab === "checkin" &&
+      isCheckinSessionOpen &&
+      selectedEventForCheckin
+    ) {
+      const { Html5QrcodeScanner } = require("html5-qrcode");
+
+      scanner = new Html5QrcodeScanner("reader", {
+        fps: 10,
+        qrbox: { width: 250, height: 250 },
+        rememberLastUsedCamera: true,
+        aspectRatio: 1.0,
+      });
+
+      scanner.render(
+        async (decodedText) => {
+          const participant = participants.find((p) => p.id === decodedText);
+
+          if (participant) {
+            if (participant.event !== selectedEventForCheckin) {
+              alert(
+                `Tiket Salah! Peserta ini terdaftar untuk event: ${participant.event}`,
+              );
+            } else if (participant.status === "attended") {
+              alert("Peserta ini sudah melakukan check-in sebelumnya.");
+            } else {
+              await markAsPresent(decodedText);
+            }
+          } else {
+            alert("QR Code tidak valid atau transaksi tidak ditemukan.");
+          }
+        },
+        (err) => {
+          /* noise */
+        },
+      );
+    }
+
+    return () => {
+      if (scanner) {
+        scanner
+          .clear()
+          .catch((error) => console.error("Failed to clear scanner", error));
+      }
+    };
+  }, [activeTab, isCheckinSessionOpen, selectedEventForCheckin, participants]);
+
   // --- LOGIKA HITUNG TRAFFIC (7 HARI TERAKHIR) ---
   const getTrafficData = () => {
     const counts = [0, 0, 0, 0, 0, 0, 0];
@@ -232,6 +282,18 @@ export default function Dashboard() {
   const saveEvent = async () => {
     if (!formData.title || !formData.date || !formData.location)
       return alert("Data belum lengkap!");
+
+    // --- BOUNDARY: VALIDASI TANGGAL ---
+    const selectedDate = new Date(formData.date);
+    const now = new Date();
+
+    if (selectedDate < now) {
+      return alert(
+        "Gagal menyimpan! Tanggal event tidak boleh sudah terlewat.",
+      );
+    }
+    // ----------------------------------
+
     const payload = {
       title: formData.title,
       eo: formData.eo,
@@ -246,10 +308,16 @@ export default function Dashboard() {
     };
 
     if (isEditing) {
-      await supabase.from("events").update(payload).eq("id", formData.id);
+      const { error } = await supabase
+        .from("events")
+        .update(payload)
+        .eq("id", formData.id);
+      if (error) return alert("Gagal update event!");
     } else {
-      await supabase.from("events").insert([payload]);
+      const { error } = await supabase.from("events").insert([payload]);
+      if (error) return alert("Gagal membuat event!");
     }
+
     resetForm();
     fetchDashboardData();
   };
@@ -1062,7 +1130,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* --- 4. MODUL CHECK-IN HARI H --- */}
+      {/* --- 4. MODUL CHECK-IN HARI H (WITH QR SCANNER) --- */}
       {activeTab === "checkin" &&
         (() => {
           const filteredParticipants = participants.filter((p) => {
@@ -1097,15 +1165,15 @@ export default function Dashboard() {
                   <div className="flex items-center gap-4">
                     <div className="w-12 h-12 bg-brand-50 text-brand-600 rounded-2xl flex items-center justify-center">
                       <span className="material-icons-round text-2xl">
-                        event_available
+                        qr_code_scanner
                       </span>
                     </div>
                     <div>
                       <h3 className="text-xl font-black text-dark tracking-tight">
-                        Konfigurasi Gate
+                        TechLoca Gate Scanner
                       </h3>
                       <p className="text-xs text-slate-400 font-medium">
-                        Pilih event aktif untuk mulai scanning
+                        Scan QR Code pada tiket peserta untuk Check-in otomatis.
                       </p>
                     </div>
                   </div>
@@ -1118,7 +1186,7 @@ export default function Dashboard() {
                       }
                       className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm outline-none focus:border-brand-500 disabled:opacity-60 transition-all"
                     >
-                      <option value="">Pilih Event...</option>
+                      <option value="">Pilih Event Aktif...</option>
                       {events.map((ev) => (
                         <option key={ev.id} value={ev.title}>
                           {ev.title}
@@ -1128,16 +1196,18 @@ export default function Dashboard() {
                     <button
                       onClick={() => {
                         if (!selectedEventForCheckin && !isCheckinSessionOpen)
-                          return alert("Pilih event dulu!");
+                          return alert("Silakan pilih event terlebih dahulu!");
                         setIsCheckinSessionOpen(!isCheckinSessionOpen);
                       }}
                       className={`w-full py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-3
-                        ${isCheckinSessionOpen ? "bg-rose-500 text-white shadow-lg shadow-rose-200" : "bg-dark text-white hover:bg-brand-600"}`}
+                  ${isCheckinSessionOpen ? "bg-rose-500 text-white shadow-lg shadow-rose-200" : "bg-dark text-white hover:bg-brand-600"}`}
                     >
                       <span
                         className={`w-2.5 h-2.5 rounded-full ${isCheckinSessionOpen ? "bg-white animate-ping" : "bg-slate-400"}`}
                       ></span>
-                      {isCheckinSessionOpen ? "Tutup Gerbang" : "Buka Gerbang"}
+                      {isCheckinSessionOpen
+                        ? "Matikan Kamera"
+                        : "Aktifkan Scanner"}
                     </button>
                   </div>
                 </div>
@@ -1145,29 +1215,31 @@ export default function Dashboard() {
                 <div className="bg-dark rounded-[2.5rem] p-8 text-white relative overflow-hidden flex flex-col justify-center">
                   <div className="relative z-10">
                     <p className="text-[10px] font-black text-brand-400 uppercase tracking-[0.2em] mb-2">
-                      Event Terpilih
+                      Live Attendance
                     </p>
-                    <h4 className="text-lg font-bold leading-tight mb-4">
-                      {selectedEventForCheckin || "Belum Ada Event"}
+                    <h4 className="text-lg font-bold leading-tight mb-4 truncate">
+                      {selectedEventForCheckin || "Standby Mode"}
                     </h4>
                     {isCheckinSessionOpen && (
                       <div className="space-y-2">
                         <div className="flex justify-between text-[10px] font-bold">
-                          <span>Progress Kehadiran</span>
+                          <span>
+                            Progress {attendedCount}/{totalSelected}
+                          </span>
                           <span>{Math.round(progressPercent)}%</span>
                         </div>
-                        <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+                        <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden border border-white/5">
                           <div
-                            className="h-full bg-brand-500 transition-all duration-1000"
+                            className="h-full bg-brand-500 transition-all duration-1000 shadow-[0_0_10px_#6366f1]"
                             style={{ width: `${progressPercent}%` }}
                           ></div>
                         </div>
                       </div>
                     )}
                   </div>
-                  <div className="absolute -right-4 -bottom-4 opacity-10 scale-150">
+                  <div className="absolute -right-4 -bottom-4 opacity-5 scale-150 rotate-12">
                     <span className="material-icons-round text-9xl">
-                      confirmation_number
+                      camera_alt
                     </span>
                   </div>
                 </div>
@@ -1176,8 +1248,26 @@ export default function Dashboard() {
               {isCheckinSessionOpen ? (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                   <div className="lg:col-span-5 space-y-6">
+                    {/* AREA SCANNER */}
+                    <div className="bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm overflow-hidden">
+                      <div
+                        id="reader"
+                        className="w-full overflow-hidden rounded-2xl border-none"
+                      ></div>
+                      <div className="mt-4 p-4 bg-amber-50 border border-amber-100 rounded-2xl flex gap-3">
+                        <span className="material-icons-round text-amber-500 text-sm">
+                          tips_and_updates
+                        </span>
+                        <p className="text-[10px] text-amber-700 font-bold leading-tight">
+                          Pastikan pencahayaan cukup dan QR Code terlihat jelas
+                          di dalam kotak scan.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* SEARCH MANUAL TETAP ADA SEBAGAI BACKUP */}
                     <div className="bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm">
-                      <div className="mt-6 relative">
+                      <div className="relative">
                         <span className="material-icons-round absolute left-5 top-1/2 -translate-y-1/2 text-slate-400">
                           search
                         </span>
@@ -1185,38 +1275,35 @@ export default function Dashboard() {
                           type="text"
                           value={searchQuery}
                           onChange={(e) => setSearchQuery(e.target.value)}
-                          placeholder="Cari Nama Peserta..."
-                          className="w-full pl-14 pr-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold outline-none focus:border-brand-500 focus:bg-white transition-all"
+                          placeholder="Input Manual Nama/ID..."
+                          className="w-full pl-14 pr-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold outline-none focus:border-brand-500 transition-all text-xs"
                         />
                       </div>
                     </div>
                   </div>
-                  <div className="lg:col-span-7 space-y-4 max-h-[600px] overflow-y-auto pr-2 no-scrollbar">
+
+                  <div className="lg:col-span-7 space-y-4 max-h-[650px] overflow-y-auto pr-2 no-scrollbar">
                     <div className="flex items-center justify-between px-4">
-                      <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                        Antrean Peserta ({filteredParticipants.length})
+                      <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                        <span className="w-2 h-2 bg-emerald-500 rounded-full"></span>
+                        Log Kehadiran Terbaru
                       </h5>
-                      <div className="flex items-center gap-4 text-[10px] font-bold">
-                        <span className="text-emerald-500 flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>{" "}
-                          Hadir: {attendedCount}
-                        </span>
-                      </div>
                     </div>
+
                     {filteredParticipants.length > 0 ? (
                       filteredParticipants.map((p) => (
                         <div
                           key={p.id}
-                          className={`p-4 rounded-[1.5rem] border bg-white flex items-center justify-between transition-all group ${p.status === "attended" ? "border-emerald-100 opacity-70" : "border-slate-100 shadow-sm"}`}
+                          className={`p-4 rounded-[1.5rem] border bg-white flex items-center justify-between transition-all group hover:border-brand-200 ${p.status === "attended" ? "border-emerald-100 bg-emerald-50/20" : "border-slate-100 shadow-sm"}`}
                         >
                           <div className="flex items-center gap-4 text-left">
                             <div
-                              className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 transition-colors ${p.status === "attended" ? "bg-emerald-50 text-emerald-500" : "bg-slate-50 text-slate-300"}`}
+                              className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 transition-all ${p.status === "attended" ? "bg-emerald-500 text-white shadow-lg shadow-emerald-200" : "bg-slate-50 text-slate-300"}`}
                             >
                               <span className="material-icons-round">
                                 {p.status === "attended"
-                                  ? "verified_user"
-                                  : "person_outline"}
+                                  ? "done_all"
+                                  : "qr_code_2"}
                               </span>
                             </div>
                             <div>
@@ -1224,20 +1311,23 @@ export default function Dashboard() {
                                 {p.name}
                               </h4>
                               <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">
-                                ID: {p.id} • {p.event}
+                                Transaction ID:{" "}
+                                <span className="text-brand-600">
+                                  {p.id.substring(0, 8)}...
+                                </span>
                               </p>
                             </div>
                           </div>
                           {p.status === "attended" ? (
                             <div className="flex flex-col items-end pr-2">
-                              <span className="text-emerald-600 font-black text-[9px] uppercase italic">
-                                Checked In
+                              <span className="text-emerald-600 font-black text-[9px] uppercase italic bg-white px-3 py-1 rounded-full border border-emerald-100">
+                                Sudah Masuk
                               </span>
                             </div>
                           ) : (
                             <button
                               onClick={() => markAsPresent(p.id)}
-                              className="h-10 px-6 bg-dark text-white text-[10px] font-black rounded-xl hover:bg-emerald-600 transition-all uppercase tracking-widest"
+                              className="h-10 px-6 bg-dark text-white text-[10px] font-black rounded-xl hover:bg-brand-600 transition-all uppercase tracking-widest shadow-md"
                             >
                               Check-In
                             </button>
@@ -1247,7 +1337,7 @@ export default function Dashboard() {
                     ) : (
                       <div className="py-20 bg-slate-50 rounded-[2.5rem] border border-dashed border-slate-200 text-center">
                         <p className="text-sm font-bold text-slate-400 italic">
-                          Tidak ada peserta yang cocok
+                          Belum ada data peserta untuk event ini.
                         </p>
                       </div>
                     )}
@@ -1255,18 +1345,19 @@ export default function Dashboard() {
                 </div>
               ) : (
                 <div className="py-32 bg-white rounded-[3rem] border border-slate-100 text-center space-y-6">
-                  <div className="w-24 h-24 bg-slate-50 text-slate-200 rounded-full flex items-center justify-center mx-auto border-8 border-white shadow-inner">
+                  <div className="w-24 h-24 bg-brand-50 text-brand-200 rounded-[2.5rem] flex items-center justify-center mx-auto border-4 border-white shadow-xl rotate-12">
                     <span className="material-icons-round text-5xl">
-                      lock_open
+                      camera
                     </span>
                   </div>
                   <div className="max-w-xs mx-auto space-y-2">
                     <h4 className="text-xl font-black text-dark tracking-tight">
-                      Security Checkpoint
+                      Gate Standby Mode
                     </h4>
                     <p className="text-xs text-slate-400 font-medium leading-relaxed">
-                      Sistem scanner sedang dalam mode standby. Silakan pilih
-                      event dan buka gerbang untuk memulai.
+                      Kamera dinonaktifkan. Pilih event dan klik{" "}
+                      <b>Aktifkan Scanner</b> untuk memulai verifikasi tiket
+                      fisik atau digital.
                     </p>
                   </div>
                 </div>

@@ -87,7 +87,6 @@ export default function Explore({ onOpenModal, navigateTo }) {
 
       if (!error) {
         setWishlist((prev) => [...prev, eventId]);
-        // Navigasi dihapus agar silent
       }
     }
   };
@@ -152,13 +151,14 @@ export default function Explore({ onOpenModal, navigateTo }) {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
           {filteredEvents.map((ev) => {
             const isFull = ev.quota <= 0;
+            const isExpired = new Date(ev.date) < new Date();
             const isWishlisted = wishlist.includes(ev.id);
 
             return (
               <div
                 key={ev.id}
                 onClick={() => onOpenModal(ev)}
-                className="bg-white rounded-[2.5rem] p-3 shadow-sm border border-slate-50 hover:shadow-2xl hover:shadow-brand-500/10 hover:-translate-y-2 transition-all duration-500 group cursor-pointer flex flex-col"
+                className={`bg-white rounded-[2.5rem] p-3 shadow-sm border border-slate-50 hover:shadow-2xl hover:shadow-brand-500/10 hover:-translate-y-2 transition-all duration-500 group cursor-pointer flex flex-col ${isExpired ? "opacity-75 grayscale-[0.5]" : ""}`}
               >
                 <div className="h-60 rounded-[2rem] overflow-hidden relative mb-5">
                   <img
@@ -178,10 +178,15 @@ export default function Explore({ onOpenModal, navigateTo }) {
                     </span>
                   </button>
 
-                  <div className="absolute bottom-4 left-4">
+                  <div className="absolute bottom-4 left-4 flex gap-2">
                     <span className="px-4 py-2 bg-brand-500 text-white text-[9px] font-black uppercase tracking-widest rounded-full shadow-lg">
                       {ev.location || "Online"}
                     </span>
+                    {isExpired && (
+                      <span className="px-4 py-2 bg-rose-500 text-white text-[9px] font-black uppercase tracking-widest rounded-full shadow-lg">
+                        Selesai
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -196,11 +201,18 @@ export default function Explore({ onOpenModal, navigateTo }) {
                         Jadwal
                       </span>
                       <div className="flex items-center gap-1.5">
-                        <span className="material-icons-round text-brand-500 text-sm">
+                        <span
+                          className={`material-icons-round text-sm ${isExpired ? "text-slate-400" : "text-brand-500"}`}
+                        >
                           calendar_today
                         </span>
-                        <span className="text-[11px] font-black text-dark">
-                          {ev.date}
+                        <span
+                          className={`text-[11px] font-black ${isExpired ? "text-slate-400" : "text-dark"}`}
+                        >
+                          {new Date(ev.date).toLocaleDateString("id-ID", {
+                            day: "numeric",
+                            month: "short",
+                          })}
                         </span>
                       </div>
                     </div>
@@ -224,19 +236,23 @@ export default function Explore({ onOpenModal, navigateTo }) {
                   <div className="mt-auto pt-5 border-t border-slate-50">
                     <div className="flex justify-between items-center mb-2">
                       <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                        Kapasitas
+                        Status Acara
                       </span>
                       <span
-                        className={`text-[10px] font-black px-3 py-1 rounded-full ${isFull ? "bg-rose-100 text-rose-600" : "bg-brand-50 text-brand-600"}`}
+                        className={`text-[10px] font-black px-3 py-1 rounded-full ${isExpired ? "bg-slate-100 text-slate-500" : isFull ? "bg-rose-100 text-rose-600" : "bg-brand-50 text-brand-600"}`}
                       >
-                        {isFull ? "Full Booked" : `${ev.quota} Slot`}
+                        {isExpired
+                          ? "Sudah Terlewat"
+                          : isFull
+                            ? "Full Booked"
+                            : `${ev.quota} Slot Tersisa`}
                       </span>
                     </div>
                     <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
                       <div
-                        className={`h-full rounded-full transition-all duration-1000 ${isFull ? "bg-rose-500" : "bg-brand-500"}`}
+                        className={`h-full rounded-full transition-all duration-1000 ${isExpired ? "bg-slate-300" : isFull ? "bg-rose-500" : "bg-brand-500"}`}
                         style={{
-                          width: `${isFull ? 100 : Math.min(100, (ev.quota / 50) * 100)}%`,
+                          width: `${isExpired ? 100 : isFull ? 100 : Math.min(100, (ev.quota / 50) * 100)}%`,
                         }}
                       ></div>
                     </div>
