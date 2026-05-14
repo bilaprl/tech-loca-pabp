@@ -9,6 +9,7 @@ export default function Dashboard() {
   const [events, setEvents] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [participants, setParticipants] = useState([]);
+  const [totalMembers, setTotalMembers] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
 
   // --- CONTROL STATE ---
@@ -28,66 +29,66 @@ export default function Dashboard() {
     date: "",
     quota: "",
     price: "",
-    location: "", // Kota
-    venue: "", // Nama Tempat
-    maps_url: "", // Link Gmaps
+    location: "",
+    venue: "",
+    maps_url: "",
     description: "",
-    img: null, // Base64 Image
+    img: null,
   });
   const [isEditing, setIsEditing] = useState(false);
   const [dragActive, setDragActive] = useState(false);
 
-  // --- FETCH ALL DATA DARI SUPABASE (VERSI DEBUG) ---
+  // --- FETCH ALL DATA DARI SUPABASE ---
   const fetchDashboardData = async () => {
     setIsLoading(true);
-    console.log("DEBUG: Memulai pengambilan data dashboard...");
-
     try {
-      // 1. Cek Event
-      const { data: eventsData, error: eventsError } = await supabase
+      // 1. Fetch Events
+      const { data: eventsData } = await supabase
         .from("events")
         .select("*")
         .order("created_at", { ascending: false });
+      setEvents(eventsData || []);
 
-      if (eventsError) {
-        console.error("DEBUG ERROR (Events):", eventsError.message);
-      } else {
-        console.log(
-          "DEBUG SUCCESS (Events):",
-          eventsData?.length,
-          "data ditemukan",
-        );
-        setEvents(eventsData || []);
-      }
+      // 2. Fetch Total Members (Profiles)
+      const { count } = await supabase
+        .from("profiles")
+        .select("*", { count: "exact", head: true });
+      setTotalMembers(count || 0);
 
-      // 2. Cek Transaksi (FIX: Menggunakan nama constraint spesifik agar tidak ambigu)
-      console.log("DEBUG: Mencoba fetch transactions...");
-      const { data: txData, error: txError } = await supabase.from(
-        "transactions",
-      ).select(`
+      // 3. Fetch Transactions dengan Joins (SINKRON DENGAN SCHEMA PROFILE KAMU)
+      const { data: txData, error: txError } = await supabase
+        .from("transactions")
+        .select(
+          `
           id, 
           status, 
           is_checked_in, 
           payment_proof_url,
-          profiles!transactions_user_id_fkey (full_name, email, avatar_url, whatsapp, institution),
+          created_at,
+          profiles!transactions_user_id_fkey (
+            full_name, 
+            email, 
+            avatar_url, 
+            whatsapp, 
+            institution,
+            location
+          ),
           events!transactions_event_id_fkey (title, date, location, venue)
-        `);
-
-      if (txError) {
-        console.error("DEBUG ERROR (Transactions):", txError.message);
-      }
+        `,
+        )
+        .order("created_at", { ascending: false });
 
       if (!txError && txData) {
-        console.log("DEBUG SUCCESS (Transactions raw):", txData);
-
         const formattedTx = txData.map((tx) => ({
           id: tx.id,
           user: tx.profiles?.full_name || "User Tidak Terdaftar",
           email: tx.profiles?.email || "-",
           wa: tx.profiles?.whatsapp || "-",
           school: tx.profiles?.institution || "-",
+          userLocation: tx.profiles?.location || "-", // SINKRONISASI LOKASI
           avatar:
-            tx.profiles?.avatar_url || "https://i.pravatar.cc/150?u=techloca",
+            tx.profiles?.avatar_url ||
+            `https://ui-avatars.com/api/?name=${tx.profiles?.full_name || "U"}&background=random`,
           event: tx.events?.title || "Event Terhapus",
           eventDate: tx.events?.date
             ? new Date(tx.events.date).toLocaleDateString("id-ID")
@@ -98,10 +99,10 @@ export default function Dashboard() {
           status: tx.status,
           proof: tx.payment_proof_url,
           is_checked_in: tx.is_checked_in,
+          rawDate: tx.created_at,
         }));
 
         setTransactions(formattedTx);
-        console.log("DEBUG: Data transaksi berhasil di-format.");
 
         const formattedParticipants = txData
           .filter(
@@ -119,10 +120,9 @@ export default function Dashboard() {
         setParticipants(formattedParticipants);
       }
     } catch (err) {
-      console.error("DEBUG CRITICAL ERROR:", err);
+      console.error("Dashboard Fetch Error:", err);
     } finally {
       setIsLoading(false);
-      console.log("DEBUG: Proses fetch selesai.");
     }
   };
 
@@ -130,17 +130,32 @@ export default function Dashboard() {
     fetchDashboardData();
   }, []);
 
-  // --- LOGIKA AKSI SUPABASE ---
+  // --- LOGIKA HITUNG TRAFFIC (7 HARI TERAKHIR) ---
+  const getTrafficData = () => {
+    const counts = [0, 0, 0, 0, 0, 0, 0];
+    const today = new Date();
+
+    transactions.forEach((tx) => {
+      const txDate = new Date(tx.rawDate);
+      const diffTime = Math.abs(today - txDate);
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) - 1;
+      if (diffDays < 7) {
+        counts[6 - diffDays]++;
+      }
+    });
+
+    const max = Math.max(...counts, 1);
+    return counts.map((c) => (c / max) * 100);
+  };
+
+  // --- LOGIKA AKSI ---
   const confirmPayment = async (id) => {
     const { error } = await supabase
       .from("transactions")
       .update({ status: "success" })
       .eq("id", id);
-    if (error) {
-      alert("Gagal memverifikasi pembayaran!");
-      return;
-    }
-    alert("Pembayaran Terverifikasi! Tiket User kini telah Aktif (Confirmed).");
+    if (error) return alert("Gagal verifikasi!");
+    alert("Pembayaran Terverifikasi!");
     fetchDashboardData();
     setSelectedTx(null);
   };
@@ -150,15 +165,62 @@ export default function Dashboard() {
       .from("transactions")
       .update({ is_checked_in: true })
       .eq("id", id);
-    if (error) {
-      alert("Gagal melakukan Check-in!");
-      return;
-    }
+    if (error) return alert("Gagal Check-in!");
     alert("Check-in Berhasil!");
     fetchDashboardData();
   };
 
-  // --- HANDLER MANAJEMEN EVENT ---
+  // --- FUNGSI MANAJEMEN EVENT ---
+  const handleDrag = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  const editEvent = (ev) => {
+    setFormData({
+      id: ev.id,
+      title: ev.title,
+      eo: ev.eo,
+      date: ev.date,
+      quota: ev.quota,
+      price: ev.price,
+      location: ev.location,
+      venue: ev.venue,
+      maps_url: ev.maps_url,
+      description: ev.description,
+      img: ev.image_url,
+    });
+    setIsEditing(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const deleteEvent = async (id) => {
+    if (
+      window.confirm(
+        "Apakah Anda yakin ingin menghapus event ini secara permanen?",
+      )
+    ) {
+      const { error } = await supabase.from("events").delete().eq("id", id);
+      if (error) return alert("Gagal menghapus event!");
+      alert("Event berhasil dihapus!");
+      fetchDashboardData();
+    }
+  };
+
   const handleFile = (file) => {
     if (file && file.type.startsWith("image/")) {
       const reader = new FileReader();
@@ -167,31 +229,9 @@ export default function Dashboard() {
     }
   };
 
-  const handleDrag = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") setDragActive(true);
-    else if (e.type === "dragleave") setDragActive(false);
-  };
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0])
-      handleFile(e.dataTransfer.files[0]);
-  };
-
   const saveEvent = async () => {
-    if (
-      !formData.title ||
-      !formData.date ||
-      !formData.location ||
-      !formData.eo
-    ) {
-      return alert("Judul, Penyelenggara, Tanggal, dan Kota wajib diisi!");
-    }
-
+    if (!formData.title || !formData.date || !formData.location)
+      return alert("Data belum lengkap!");
     const payload = {
       title: formData.title,
       eo: formData.eo,
@@ -206,55 +246,12 @@ export default function Dashboard() {
     };
 
     if (isEditing) {
-      const { error } = await supabase
-        .from("events")
-        .update(payload)
-        .eq("id", formData.id);
-      if (error) {
-        console.error("Supabase Error:", error);
-        return alert(`Gagal edit: ${error.message}`);
-      }
-      alert("Berhasil diperbarui!");
+      await supabase.from("events").update(payload).eq("id", formData.id);
     } else {
-      const { error } = await supabase.from("events").insert([payload]);
-      if (error) {
-        console.error("Supabase Error:", error);
-        return alert(`Gagal publish: ${error.message}`);
-      }
-      alert("Berhasil dipublikasikan!");
+      await supabase.from("events").insert([payload]);
     }
-
     resetForm();
     fetchDashboardData();
-  };
-
-  const editEvent = (ev) => {
-    const formattedDate = ev.date
-      ? new Date(ev.date).toISOString().slice(0, 16)
-      : "";
-    setFormData({
-      id: ev.id,
-      title: ev.title,
-      eo: ev.eo || "",
-      date: formattedDate,
-      quota: ev.quota,
-      price: ev.price,
-      location: ev.location || "",
-      venue: ev.venue || "",
-      maps_url: ev.maps_url || "",
-      description: ev.description || "",
-      img: ev.image_url,
-    });
-    setIsEditing(true);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  };
-
-  const deleteEvent = async (id) => {
-    if (confirm("Yakin ingin menghapus event ini?")) {
-      const { error } = await supabase.from("events").delete().eq("id", id);
-      if (error) alert("Gagal menghapus event (mungkin ada relasi transaksi).");
-      else fetchDashboardData();
-    }
   };
 
   const resetForm = () => {
@@ -300,7 +297,6 @@ export default function Dashboard() {
           </h2>
         </div>
 
-        {/* --- SUB-NAVIGATION BENTO STYLE --- */}
         <div className="flex bg-slate-100 p-1.5 rounded-2xl gap-1 w-full md:w-auto overflow-x-auto no-scrollbar">
           {[
             { id: "overview", label: "Ikhtisar", icon: "grid_view" },
@@ -329,11 +325,17 @@ export default function Dashboard() {
             <div className="bg-white p-7 rounded-[2.5rem] border border-slate-100 shadow-sm relative overflow-hidden group">
               <div className="absolute -right-4 -top-4 w-16 h-16 bg-brand-50 rounded-full group-hover:scale-150 transition-transform duration-700"></div>
               <p className="relative z-10 text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">
-                Total Event Aktif
+                Total Member
               </p>
               <h4 className="relative z-10 text-3xl font-black text-dark tracking-tighter">
-                {events.length}
+                {totalMembers.toLocaleString()}
               </h4>
+              <div className="relative z-10 flex items-center gap-1 mt-2 text-brand-600 font-bold text-[10px]">
+                <span className="material-icons-round text-xs">
+                  trending_up
+                </span>
+                <span>Active Profiles</span>
+              </div>
             </div>
 
             <div className="bg-white p-7 rounded-[2.5rem] border border-slate-100 shadow-sm relative overflow-hidden group">
@@ -344,13 +346,16 @@ export default function Dashboard() {
               <h4 className="relative z-10 text-3xl font-black text-dark tracking-tighter">
                 {
                   transactions.filter(
-                    (t) =>
-                      t.status === "success" ||
-                      t.status === "confirmed" ||
-                      t.is_checked_in,
+                    (t) => t.status === "success" || t.status === "confirmed",
                   ).length
                 }
               </h4>
+              <div className="relative z-10 flex items-center gap-1 mt-2 text-emerald-500 font-bold text-[10px]">
+                <span className="material-icons-round text-xs">
+                  check_circle
+                </span>
+                <span>Siap Check-in</span>
+              </div>
             </div>
 
             <div className="bg-white p-7 rounded-[2.5rem] border border-slate-100 shadow-sm relative overflow-hidden group">
@@ -361,6 +366,12 @@ export default function Dashboard() {
               <h4 className="relative z-10 text-3xl font-black text-dark tracking-tighter">
                 {transactions.filter((t) => t.status === "pending").length}
               </h4>
+              <div className="relative z-10 flex items-center gap-1 mt-2 text-amber-500 font-bold text-[10px]">
+                <span className="material-icons-round text-xs">
+                  hourglass_empty
+                </span>
+                <span>Perlu Verifikasi</span>
+              </div>
             </div>
 
             <div className="bg-dark p-7 rounded-[2.5rem] text-white shadow-xl shadow-dark/20 relative overflow-hidden group">
@@ -373,8 +384,87 @@ export default function Dashboard() {
                 <span className="w-2.5 h-2.5 bg-emerald-400 rounded-full animate-pulse shadow-[0_0_10px_#34d399]"></span>
               </h4>
               <p className="relative z-10 text-[10px] text-slate-400 mt-2 font-medium">
-                Supabase Connected
+                Region: Tasikmalaya-WestJava
               </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <div className="lg:col-span-8 bg-white p-10 rounded-[3rem] border border-slate-100 shadow-sm">
+              <div className="flex justify-between items-center mb-10">
+                <div>
+                  <h3 className="font-heading text-xl font-black text-dark">
+                    Traffic Pendaftaran
+                  </h3>
+                  <p className="text-xs text-slate-400 font-bold mt-1">
+                    Aktivitas 7 Hari Terakhir (Real-time)
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <span className="w-3 h-3 bg-brand-500 rounded-full"></span>
+                  <span className="w-3 h-3 bg-slate-100 rounded-full"></span>
+                </div>
+              </div>
+              <div className="h-64 flex items-end gap-3 justify-between pb-2">
+                {getTrafficData().map((h, i) => (
+                  <div
+                    key={i}
+                    className="flex-1 flex flex-col items-center gap-4"
+                  >
+                    <div
+                      className={`w-full rounded-t-xl transition-all duration-1000 ${i === 6 ? "bg-brand-500 shadow-lg shadow-brand-500/20" : "bg-slate-50"}`}
+                      style={{ height: `${h}%` }}
+                    ></div>
+                    <span className="text-[10px] font-bold text-slate-400">
+                      Day {i + 1}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="lg:col-span-4 bg-white p-8 rounded-[3rem] border border-slate-100 shadow-sm flex flex-col">
+              <h3 className="font-heading text-lg font-black text-dark mb-6">
+                Log Aktivitas Terbaru
+              </h3>
+              <div className="space-y-6 overflow-y-auto max-h-[300px] pr-2 no-scrollbar">
+                {transactions.slice(0, 6).map((log, i) => (
+                  <div
+                    key={i}
+                    className="flex gap-4 items-start border-l-2 border-slate-50 pl-4 relative"
+                  >
+                    <div
+                      className={`absolute -left-[5px] top-0 w-2 h-2 rounded-full ${log.status === "pending" ? "bg-amber-400" : "bg-emerald-400"}`}
+                    ></div>
+                    <div
+                      className={`w-8 h-8 rounded-xl ${log.status === "pending" ? "bg-amber-50 text-amber-500" : "bg-emerald-50 text-emerald-500"} flex items-center justify-center shrink-0`}
+                    >
+                      <span className="material-icons-round text-sm">
+                        {log.status === "pending"
+                          ? "hourglass_top"
+                          : "person_add"}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-dark leading-tight">
+                        {log.user}{" "}
+                        <span className="text-slate-400 font-medium">
+                          {log.status === "pending"
+                            ? "menunggu verifikasi"
+                            : `mendaftar ${log.event}`}
+                        </span>
+                      </p>
+                      <p className="text-[10px] text-slate-400 mt-1 font-bold uppercase tracking-tighter">
+                        {new Date(log.rawDate).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}{" "}
+                        WIB
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -766,9 +856,14 @@ export default function Dashboard() {
                             className="w-8 h-8 rounded-full object-cover shadow-sm ring-2 ring-white"
                             alt="Avatar"
                           />
-                          <span className="font-bold text-dark text-sm">
-                            {t.user}
-                          </span>
+                          <div>
+                            <p className="font-bold text-dark text-sm leading-none mb-1">
+                              {t.user}
+                            </p>
+                            <p className="text-[9px] font-bold text-brand-600 uppercase tracking-tighter">
+                              {t.school}
+                            </p>
+                          </div>
                         </div>
                       </td>
                       <td className="px-8 py-6 text-xs font-semibold text-slate-600">
@@ -861,21 +956,30 @@ export default function Dashboard() {
                         </p>
                       </div>
                     </div>
-                    <div className="space-y-4 pt-4 border-t border-slate-200/50">
-                      <div className="flex items-center gap-3 text-slate-500">
-                        <span className="material-icons-round text-sm">
+                    {/* SINKRONISASI DATA PROFILE LENGKAP */}
+                    <div className="grid grid-cols-2 gap-3 pt-4 border-t border-slate-200/50">
+                      <div className="flex items-center gap-2 text-slate-500 overflow-hidden">
+                        <span className="material-icons-round text-sm shrink-0">
                           alternate_email
                         </span>
-                        <span className="text-xs font-bold">
+                        <span className="text-[10px] font-bold truncate">
                           {selectedTx.email}
                         </span>
                       </div>
-                      <div className="flex items-center gap-3 text-slate-500">
-                        <span className="material-icons-round text-sm">
+                      <div className="flex items-center gap-2 text-slate-500">
+                        <span className="material-icons-round text-sm shrink-0">
                           phone_iphone
                         </span>
-                        <span className="text-xs font-bold">
+                        <span className="text-[10px] font-bold">
                           {selectedTx.wa}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 text-slate-500 col-span-2">
+                        <span className="material-icons-round text-sm shrink-0">
+                          location_on
+                        </span>
+                        <span className="text-[10px] font-bold truncate">
+                          {selectedTx.userLocation}
                         </span>
                       </div>
                     </div>
@@ -901,13 +1005,24 @@ export default function Dashboard() {
 
                   {selectedTx.proof && (
                     <div className="pt-4">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4">
+                        Bukti Transfer
+                      </p>
+                      <img
+                        src={selectedTx.proof}
+                        className="w-full rounded-2xl border border-slate-200 shadow-sm mb-4"
+                        alt="Bukti"
+                      />
                       <a
                         href={selectedTx.proof}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-sm text-brand-600 font-bold underline"
+                        className="text-sm text-brand-600 font-bold underline flex items-center gap-2"
                       >
-                        Lihat Bukti Transfer
+                        <span className="material-icons-round text-sm">
+                          open_in_new
+                        </span>{" "}
+                        Lihat Gambar Penuh
                       </a>
                     </div>
                   )}

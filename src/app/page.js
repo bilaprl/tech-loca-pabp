@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
-import { supabase } from "@/lib/supabaseClient"; // Pastikan import ini sudah benar
+import { supabase } from "@/lib/supabaseClient";
 import Navbar from "@/components/Navbar";
 import AuthModal from "@/components/AuthModal";
 import LandingPage from "@/components/sections/LandingPage";
@@ -11,7 +11,6 @@ import Wishlist from "@/components/sections/Wishlist";
 import MyTickets from "@/components/sections/MyTickets";
 import Footer from "@/components/Footer";
 
-// --- KOMPONEN BARU ---
 import Certificates from "@/components/sections/Certificates";
 import Profile from "@/components/sections/Profile";
 import FAQ from "@/components/sections/FAQ";
@@ -19,21 +18,22 @@ import FAQ from "@/components/sections/FAQ";
 export default function Page() {
   const [currentPage, setCurrentPage] = useState("home");
   const [role, setRole] = useState(null);
+  const [userData, setUserData] = useState(null);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState(null);
 
-  // 1. FUNGSI SINKRONISASI ROLE
   const syncUserRole = (user) => {
     if (user) {
+      setUserData(user);
       const userRole = user.email === "admin@techloca.com" ? "eo" : "peserta";
       setRole(userRole);
       localStorage.setItem("tech_role", userRole);
-      
-      // Jika user baru login dan masih di home, arahkan ke halaman yang sesuai
+
       if (currentPage === "home") {
         setCurrentPage(userRole === "eo" ? "dashboard" : "explore");
       }
     } else {
+      setUserData(null);
       setRole(null);
       localStorage.removeItem("tech_role");
       setCurrentPage("home");
@@ -41,17 +41,19 @@ export default function Page() {
   };
 
   useEffect(() => {
-    // 2. CEK SESSION SAAT INI (Saat pertama kali load)
     const initAuth = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
       if (session?.user) {
         syncUserRole(session.user);
       }
     };
     initAuth();
 
-    // 3. LISTEN PERUBAHAN AUTH SECARA REAL-TIME (PENTING UNTUK GOOGLE LOGIN)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === "SIGNED_IN" && session) {
         syncUserRole(session.user);
         setIsAuthOpen(false);
@@ -60,17 +62,18 @@ export default function Page() {
       }
     });
 
-    // Request permission notifikasi
-    if (typeof window !== "undefined" && Notification.permission !== "granted") {
+    if (
+      typeof window !== "undefined" &&
+      Notification.permission !== "granted"
+    ) {
       Notification.requestPermission();
     }
 
     return () => {
       subscription.unsubscribe();
     };
-  }, [currentPage]); // Re-run jika currentPage berubah untuk validasi redirect
+  }, [currentPage]);
 
-  // Fungsi Login Manual (untuk AuthModal)
   const loginAs = (userRole) => {
     const normalizedRole = userRole.toLowerCase();
     setRole(normalizedRole);
@@ -79,7 +82,6 @@ export default function Page() {
     setCurrentPage(normalizedRole === "eo" ? "dashboard" : "explore");
   };
 
-  // Fungsi Logout Terintegrasi Supabase
   const logout = async () => {
     await supabase.auth.signOut();
     syncUserRole(null);
@@ -105,7 +107,7 @@ export default function Page() {
         )}
 
         {currentPage === "explore" && (
-          <Explore onOpenModal={setSelectedEvent} />
+          <Explore onOpenModal={setSelectedEvent} navigateTo={setCurrentPage} />
         )}
 
         {currentPage === "dashboard" && (
@@ -116,6 +118,7 @@ export default function Page() {
           <Wishlist
             onOpenModal={setSelectedEvent}
             navigateTo={setCurrentPage}
+            user={userData}
           />
         )}
 
@@ -128,10 +131,8 @@ export default function Page() {
         {currentPage === "faq" && <FAQ />}
       </main>
 
-      {/* Footer disembunyikan jika di dashboard agar lebih rapi */}
       {currentPage !== "dashboard" && <Footer navigateTo={setCurrentPage} />}
 
-      {/* MODAL SISTEM */}
       {isAuthOpen && (
         <AuthModal loginAs={loginAs} onClose={() => setIsAuthOpen(false)} />
       )}
@@ -140,6 +141,7 @@ export default function Page() {
         <GlobalModal
           event={selectedEvent}
           onClose={() => setSelectedEvent(null)}
+          navigateTo={setCurrentPage}
         />
       )}
     </>
