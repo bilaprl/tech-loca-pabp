@@ -130,7 +130,7 @@ export default function Dashboard() {
     fetchDashboardData();
   }, []);
 
-  // --- LOGIKA QR SCANNER (PERBAIKAN: DIPINDAHKAN KE TOP LEVEL) ---
+  // --- LOGIKA QR SCANNER (PERBAIKAN: VALIDASI LANGSUNG KE DB) ---
   useEffect(() => {
     let scanner = null;
     if (
@@ -149,20 +149,36 @@ export default function Dashboard() {
 
       scanner.render(
         async (decodedText) => {
-          const participant = participants.find((p) => p.id === decodedText);
+          // Bersihkan ID dari spasi atau karakter aneh (sering jadi penyebab "not found")
+          const cleanId = decodedText.trim();
 
-          if (participant) {
-            if (participant.event !== selectedEventForCheckin) {
-              alert(
-                `Tiket Salah! Peserta ini terdaftar untuk event: ${participant.event}`,
-              );
-            } else if (participant.status === "attended") {
-              alert("Peserta ini sudah melakukan check-in sebelumnya.");
-            } else {
-              await markAsPresent(decodedText);
-            }
-          } else {
+          // Cek langsung ke database biar pasti dapat data terbaru
+          const { data: tx, error } = await supabase
+            .from("transactions")
+            .select(
+              `id, status, is_checked_in, events!transactions_event_id_fkey(title)`,
+            )
+            .eq("id", cleanId)
+            .single();
+
+          if (error || !tx) {
             alert("QR Code tidak valid atau transaksi tidak ditemukan.");
+            return;
+          }
+
+          // Validasi Event yang dipilih di dashboard
+          if (tx.events.title !== selectedEventForCheckin) {
+            alert(
+              `Tiket Salah! Peserta ini terdaftar untuk event: ${tx.events.title}`,
+            );
+          } else if (tx.is_checked_in) {
+            alert("Peserta ini sudah melakukan check-in sebelumnya.");
+          } else if (tx.status !== "success" && tx.status !== "confirmed") {
+            alert(
+              "Pembayaran belum diverifikasi. Silakan cek bagian Verifikasi.",
+            );
+          } else {
+            await markAsPresent(cleanId);
           }
         },
         (err) => {
@@ -178,7 +194,7 @@ export default function Dashboard() {
           .catch((error) => console.error("Failed to clear scanner", error));
       }
     };
-  }, [activeTab, isCheckinSessionOpen, selectedEventForCheckin, participants]);
+  }, [activeTab, isCheckinSessionOpen, selectedEventForCheckin]); // Hapus 'participants' agar scanner tidak re-render terus
 
   // --- LOGIKA HITUNG TRAFFIC (7 HARI TERAKHIR) ---
   const getTrafficData = () => {
