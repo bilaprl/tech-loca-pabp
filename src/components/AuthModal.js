@@ -14,9 +14,12 @@ export default function AuthPage({ loginAs, onClose }) {
   // ✅ AUTO DETECT SESSION
   useEffect(() => {
     const checkUser = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
       if (session?.user) {
-        const role = session.user.email === "admin@techloca.com" ? "eo" : "peserta";
+        const role =
+          session.user.email === "admin@techloca.com" ? "eo" : "peserta";
         loginAs(role);
         onClose();
       }
@@ -29,12 +32,12 @@ export default function AuthPage({ loginAs, onClose }) {
     setLoading(true);
     try {
       const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
+        provider: "google",
         options: {
           redirectTo: window.location.origin,
           queryParams: {
-            access_type: 'offline',
-            prompt: 'consent',
+            access_type: "offline",
+            prompt: "consent",
           },
         },
       });
@@ -57,7 +60,8 @@ export default function AuthPage({ loginAs, onClose }) {
         if (error) throw error;
 
         if (data?.user) {
-          const role = data.user.email === "admin@techloca.com" ? "eo" : "peserta";
+          const role =
+            data.user.email === "admin@techloca.com" ? "eo" : "peserta";
           loginAs(role);
           onClose();
         }
@@ -84,7 +88,7 @@ export default function AuthPage({ loginAs, onClose }) {
             console.error("Database Sync Error:", profileError.message);
             // Tetap lanjut meskipun profil gagal, karena user auth sudah berhasil dibuat
           }
-          
+
           alert("Registrasi Berhasil! Silakan masuk.");
           setIsLogin(true);
         }
@@ -98,8 +102,9 @@ export default function AuthPage({ loginAs, onClose }) {
 
   return (
     <div className="fixed inset-0 z-[300] bg-white flex flex-col md:flex-row overflow-hidden animate-in fade-in duration-500">
-      {/* SEKSI KIRI: Visual Branding */}
+      {/* SEKSI KIRI: Visual Branding IT (Hidden on Mobile) */}
       <div className="hidden md:flex md:w-5/12 lg:w-1/2 bg-dark relative items-center justify-center p-12 overflow-hidden">
+        {/* Background Hiasan IT */}
         <div className="absolute top-[-10%] right-[-10%] w-[500px] h-[500px] bg-brand-600/20 rounded-full blur-[120px] animate-pulse"></div>
         <div className="absolute bottom-[-10%] left-[-10%] w-[400px] h-[400px] bg-indigo-500/10 rounded-full blur-[100px] animate-pulse delay-1000"></div>
 
@@ -113,20 +118,54 @@ export default function AuthPage({ loginAs, onClose }) {
 
         <div className="relative z-10 max-w-md">
           <div className="w-20 h-20 bg-brand-600 rounded-3xl flex items-center justify-center mb-8 shadow-2xl shadow-brand-500/40 -rotate-3">
-            <img src="/logo.png" alt="Logo" className="w-20 h-20 object-contain rounded-2xl" />
+            <img
+              src="/logo.png"
+              alt="EventLoca Logo"
+              className="w-20 h-20 object-contain rounded-2xl"
+            />
           </div>
 
           <h2 className="font-heading text-5xl font-extrabold text-white mb-6 leading-[1.1]">
-            Build the <span className="text-brand-500 italic">Next Generation</span> of Tech.
+            Build the{" "}
+            <span className="text-brand-500 italic">Next Generation</span> of
+            Tech.
           </h2>
           <p className="text-slate-400 text-lg leading-relaxed mb-10">
-            Platform ekosistem digital untuk menghubungkan talenta IT, mahasiswa, dan profesional.
+            Platform ekosistem digital untuk menghubungkan talenta IT,
+            mahasiswa, dan profesional dalam membangun inovasi masa depan.
           </p>
+
+          <div className="inline-flex items-center gap-4 p-4 bg-white/5 backdrop-blur-md border border-white/10 rounded-2xl">
+            <div className="flex -space-x-3">
+              {[1, 2, 3].map((i) => (
+                <div
+                  key={i}
+                  className="w-10 h-10 rounded-full border-2 border-dark overflow-hidden"
+                >
+                  <img
+                    src={`https://i.pravatar.cc/150?u=${i + 25}`}
+                    alt="user"
+                  />
+                </div>
+              ))}
+            </div>
+            <p className="text-xs font-bold text-white tracking-wide uppercase">
+              +10,000{" "}
+              <span className="text-slate-400 font-medium">
+                Digital Talents Joined
+              </span>
+            </p>
+          </div>
+        </div>
+
+        <div className="absolute bottom-12 right-12 opacity-20 font-mono text-brand-500 text-sm animate-bounce">
+          {"<Connect.Innovate.Grow />"}
         </div>
       </div>
 
-      {/* SEKSI KANAN: Form */}
+      {/* SEKSI KANAN: Form Section - REPAIR RESPONSIVE & FLEXIBLE */}
       <div className="flex-1 flex flex-col h-full bg-slate-50/50 relative overflow-hidden">
+        {/* Fixed Close Button */}
         <button
           onClick={onClose}
           className="absolute top-6 right-6 z-[350] w-10 h-10 bg-white rounded-full shadow-sm border border-slate-100 flex items-center justify-center text-slate-400 hover:text-dark hover:rotate-90 transition-all duration-300"
@@ -134,14 +173,17 @@ export default function AuthPage({ loginAs, onClose }) {
           <span className="material-icons-round">close</span>
         </button>
 
+        {/* Scrollable Container */}
         <div className="flex-1 overflow-y-auto px-6 py-12 md:px-12 flex justify-center items-start">
           <div className="w-full max-w-[400px] my-auto">
             <div className="mb-8">
               <h3 className="font-heading text-3xl font-extrabold text-dark mb-2 tracking-tight">
                 {isLogin ? "Welcome Back!" : "Get Started"}
               </h3>
-              <p className="text-slate-400 text-sm font-medium">
-                {isLogin ? "Akses dashboard Anda sekarang." : "Gabung dan temukan peluang teknologi."}
+              <p className="text-slate-400 text-sm font-medium leading-relaxed">
+                {isLogin
+                  ? "Akses dashboard dan eksplorasi event terbaru."
+                  : "Gabung sekarang dan temukan peluang teknologi terdepan di lokasimu."}
               </p>
             </div>
 
@@ -150,14 +192,14 @@ export default function AuthPage({ loginAs, onClose }) {
               <button
                 type="button"
                 onClick={() => setIsLogin(true)}
-                className={`flex-1 py-2.5 rounded-xl text-[10px] font-extrabold tracking-widest transition-all ${isLogin ? "bg-white text-brand-600 shadow-md" : "text-slate-500"}`}
+                className={`flex-1 py-2.5 rounded-xl text-[10px] font-extrabold tracking-widest transition-all duration-300 ${isLogin ? "bg-white text-brand-600 shadow-md" : "text-slate-500"}`}
               >
                 LOG IN
               </button>
               <button
                 type="button"
                 onClick={() => setIsLogin(false)}
-                className={`flex-1 py-2.5 rounded-xl text-[10px] font-extrabold tracking-widest transition-all ${!isLogin ? "bg-white text-brand-600 shadow-md" : "text-slate-500"}`}
+                className={`flex-1 py-2.5 rounded-xl text-[10px] font-extrabold tracking-widest transition-all duration-300 ${!isLogin ? "bg-white text-brand-600 shadow-md" : "text-slate-500"}`}
               >
                 SIGN UP
               </button>
@@ -166,27 +208,38 @@ export default function AuthPage({ loginAs, onClose }) {
             <form className="space-y-4" onSubmit={handleSubmit}>
               {!isLogin && (
                 <>
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase ml-4 tracking-wider">Full Name</label>
+                  <div className="space-y-1.5 animate-in slide-in-from-top duration-300">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase ml-4 tracking-wider">
+                      Full Name
+                    </label>
                     <div className="relative">
-                      <span className="material-icons-round absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm">person_outline</span>
+                      <span className="material-icons-round absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm">
+                        person_outline
+                      </span>
                       <input
                         type="text"
                         required
-                        className="w-full pl-11 pr-4 py-3.5 rounded-2xl border border-slate-200 bg-white focus:border-brand-500 focus:outline-none text-sm font-medium"
+                        placeholder="Nabila Aprilianti"
+                        className="w-full pl-11 pr-4 py-3.5 rounded-2xl border border-slate-200 bg-white focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 focus:outline-none transition-all text-sm font-medium"
                         value={name}
                         onChange={(e) => setName(e.target.value)}
                       />
                     </div>
                   </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase ml-4 tracking-wider">Location</label>
+
+                  <div className="space-y-1.5 animate-in slide-in-from-top duration-500">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase ml-4 tracking-wider">
+                      Location
+                    </label>
                     <div className="relative">
-                      <span className="material-icons-round absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm">location_on</span>
+                      <span className="material-icons-round absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm">
+                        location_on
+                      </span>
                       <input
                         type="text"
                         required
-                        className="w-full pl-11 pr-4 py-3.5 rounded-2xl border border-slate-200 bg-white focus:border-brand-500 focus:outline-none text-sm font-medium"
+                        placeholder="Contoh: Tasikmalaya"
+                        className="w-full pl-11 pr-4 py-3.5 rounded-2xl border border-slate-200 bg-white focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 focus:outline-none transition-all text-sm font-medium"
                         value={location}
                         onChange={(e) => setLocation(e.target.value)}
                       />
@@ -196,13 +249,18 @@ export default function AuthPage({ loginAs, onClose }) {
               )}
 
               <div className="space-y-1.5">
-                <label className="text-[10px] font-bold text-slate-400 uppercase ml-4 tracking-wider">Email Address</label>
+                <label className="text-[10px] font-bold text-slate-400 uppercase ml-4 tracking-wider">
+                  Email Address
+                </label>
                 <div className="relative">
-                  <span className="material-icons-round absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm">alternate_email</span>
+                  <span className="material-icons-round absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm">
+                    alternate_email
+                  </span>
                   <input
                     type="email"
                     required
-                    className="w-full pl-11 pr-4 py-3.5 rounded-2xl border border-slate-200 bg-white focus:border-brand-500 focus:outline-none text-sm font-medium"
+                    placeholder="name@techloca.com"
+                    className="w-full pl-11 pr-4 py-3.5 rounded-2xl border border-slate-200 bg-white focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 focus:outline-none transition-all text-sm font-medium"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                   />
@@ -210,13 +268,18 @@ export default function AuthPage({ loginAs, onClose }) {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-[10px] font-bold text-slate-400 uppercase ml-4 tracking-wider">Password</label>
+                <label className="text-[10px] font-bold text-slate-400 uppercase ml-4 tracking-wider">
+                  Password
+                </label>
                 <div className="relative">
-                  <span className="material-icons-round absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm">lock_open</span>
+                  <span className="material-icons-round absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm">
+                    lock_open
+                  </span>
                   <input
                     type="password"
                     required
-                    className="w-full pl-11 pr-4 py-3.5 rounded-2xl border border-slate-200 bg-white focus:border-brand-500 focus:outline-none text-sm font-medium"
+                    placeholder="••••••••"
+                    className="w-full pl-11 pr-4 py-3.5 rounded-2xl border border-slate-200 bg-white focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 focus:outline-none transition-all text-sm font-medium"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                   />
@@ -226,16 +289,24 @@ export default function AuthPage({ loginAs, onClose }) {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full py-4 bg-brand-600 hover:bg-brand-500 text-white font-bold rounded-2xl shadow-xl shadow-brand-500/20 active:scale-[0.98] mt-4 text-sm transition-all disabled:opacity-50"
+                className="w-full py-4 bg-brand-600 hover:bg-brand-500 text-white font-bold rounded-2xl shadow-xl shadow-brand-500/20 active:scale-[0.98] mt-4 text-sm tracking-wide transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {loading ? "Memproses..." : isLogin ? "Masuk ke Platform" : "Daftar Sekarang"}
+                {loading
+                  ? "Memproses..."
+                  : isLogin
+                    ? "Masuk ke Platform"
+                    : "Daftar Sekarang"}
               </button>
             </form>
 
             <div className="relative my-8">
-              <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-200"></div></div>
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-slate-200"></div>
+              </div>
               <div className="relative flex justify-center text-[9px] uppercase font-black text-slate-400">
-                <span className="bg-slate-50/50 px-4 tracking-[0.2em]">Social Connect</span>
+                <span className="bg-slate-50/50 px-4 tracking-[0.2em]">
+                  Social Connect
+                </span>
               </div>
             </div>
 
@@ -243,11 +314,22 @@ export default function AuthPage({ loginAs, onClose }) {
               type="button"
               onClick={handleGoogleLogin}
               disabled={loading}
-              className="w-full py-3.5 border border-slate-200 bg-white hover:bg-slate-50 text-dark font-bold rounded-2xl transition-all flex items-center justify-center gap-3 text-sm shadow-sm disabled:opacity-50"
+              className="w-full py-3.5 border border-slate-200 bg-white hover:bg-slate-50 text-dark font-bold rounded-2xl transition-all flex items-center justify-center gap-3 text-sm shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <img src="https://www.svgrepo.com/show/475656/google-color.svg" className="w-5 h-5" alt="Google" />
+              <img
+                src="https://www.svgrepo.com/show/475656/google-color.svg"
+                className="w-5 h-5"
+                alt="Google"
+              />
               Lanjutkan dengan Google
             </button>
+
+            <p className="text-center text-slate-400 text-[10px] mt-10 pb-4 font-medium">
+              Protected by TechLoca Security.{" "}
+              <a href="#" className="text-brand-600 font-bold hover:underline">
+                Privacy Policy
+              </a>
+            </p>
           </div>
         </div>
       </div>

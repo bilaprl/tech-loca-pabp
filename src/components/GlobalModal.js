@@ -8,6 +8,8 @@ export default function GlobalModal({ event, onClose, navigateTo }) {
   const [bookingSuccess, setBookingSuccess] = useState(false);
   const [isWishlisted, setIsWishlisted] = useState(false);
   const [user, setUser] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [currentQuota, setCurrentQuota] = useState(event?.sisa_slot || 0);
 
   useEffect(() => {
     const checkWishlistStatus = async () => {
@@ -17,12 +19,23 @@ export default function GlobalModal({ event, onClose, navigateTo }) {
       setUser(currentUser);
 
       if (currentUser && event) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", currentUser.id)
+          .maybeSingle();
+
+        if (profile?.role === "admin") {
+          setIsAdmin(true);
+        }
+
+        // PERBAIKAN 406 ERROR: Ganti .single() jadi .maybeSingle()
         const { data } = await supabase
           .from("wishlist")
           .select("id")
           .eq("user_id", currentUser.id)
           .eq("event_id", event.id)
-          .single();
+          .maybeSingle();
 
         if (data) setIsWishlisted(true);
       }
@@ -33,6 +46,10 @@ export default function GlobalModal({ event, onClose, navigateTo }) {
   const toggleWishlist = async () => {
     if (!user) {
       alert("Silakan login terlebih dahulu untuk menyimpan wishlist.");
+      return;
+    }
+    if (isAdmin) {
+      alert("Admin tidak dapat menambahkan wishlist.");
       return;
     }
 
@@ -59,56 +76,83 @@ export default function GlobalModal({ event, onClose, navigateTo }) {
       return;
     }
 
+    if (isAdmin) {
+      alert("Mode Admin: Tidak diizinkan melakukan pendaftaran.");
+      return;
+    }
+
     setIsBooking(true);
 
     try {
       const {
-        data: { user },
+        data: { user: currentUser },
         error: authError,
       } = await supabase.auth.getUser();
 
-      if (authError || !user) {
+      if (authError || !currentUser) {
         alert("Silakan Login terlebih dahulu untuk mendaftar acara.");
         setIsBooking(false);
         return;
       }
 
+      // 1. CEK REAL-TIME DARI VIEW (Untuk mencegah bentrok jika 2 orang klik bersamaan)
+      const { data: latestEvent, error: quotaError } = await supabase
+        .from("events_with_slots")
+        .select("sisa_slot")
+        .eq("id", event.id)
+        .maybeSingle();
+
+      if (quotaError || !latestEvent || latestEvent.sisa_slot <= 0) {
+        alert("Maaf, kuota sudah habis dipesan orang lain!");
+        setCurrentQuota(0);
+        setIsBooking(false);
+        return;
+      }
+
+      // 2. CUKUP INSERT KE TRANSACTIONS (Tidak perlu meng-update tabel events lagi)
       const { error: insertError } = await supabase
         .from("transactions")
         .insert([
           {
             event_id: event.id,
-            user_id: user.id,
+            user_id: currentUser.id,
             status: "pending",
           },
         ]);
 
       if (insertError) {
         console.error("Booking Error:", insertError);
-        alert("Gagal melakukan pemesanan. Mungkin Anda sudah terdaftar.");
-      } else {
-        setBookingSuccess(true);
-        if (
-          typeof window !== "undefined" &&
-          Notification.permission === "granted"
-        ) {
-          new Notification("Booking Berhasil!", {
-            body: `Tiket untuk ${event.title} berstatus Pending.`,
-            icon: "/logo.png",
-          });
-        }
+        alert("Gagal daftar. Mungkin Anda sudah terdaftar di event ini.");
+        setIsBooking(false);
+        return;
       }
+
+      // 3. SUKSES UPDATE STATE LOKAL AGAR BERUBAH DI MATA USER SEKETIKA
+      setCurrentQuota((prev) => Math.max(0, prev - 1));
+      setBookingSuccess(true);
+
+      if (
+        typeof window !== "undefined" &&
+        Notification.permission === "granted"
+      ) {
+        new Notification("Booking Berhasil!", {
+          body: `Slot untuk ${event.title} telah diamankan.`,
+          icon: "/logo.png",
+        });
+      }
+
+      window.location.reload();
     } catch (err) {
       console.error(err);
       alert("Terjadi kesalahan jaringan.");
+    } finally {
+      setIsBooking(false);
     }
-
-    setIsBooking(false);
   };
 
   if (!event) return null;
 
-  const isFull = event.quota === 0;
+  const isFull = currentQuota <= 0;
   const isExpired = new Date(event.date) < new Date();
 
   const eventDateObj = new Date(event.date);
@@ -184,20 +228,17 @@ export default function GlobalModal({ event, onClose, navigateTo }) {
             <h2 className="font-heading text-3xl lg:text-4xl font-extrabold text-dark leading-tight">
               {event.title}
             </h2>
-
-            <button
-              onClick={toggleWishlist}
-              className={`flex-shrink-0 w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-300 border 
-                ${
-                  isWishlisted
-                    ? "bg-rose-50 border-rose-200 text-rose-500 shadow-inner"
-                    : "bg-white border-slate-200 text-slate-400 hover:border-brand-500 hover:text-brand-500 hover:bg-brand-50 shadow-sm"
-                }`}
-            >
-              <span className="material-icons-round text-2xl">
-                {isWishlisted ? "favorite" : "favorite_border"}
-              </span>
-            </button>
+            {!isAdmin && (
+              <button
+                onClick={toggleWishlist}
+                className={`flex-shrink-0 w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-300 border 
+                  ${isWishlisted ? "bg-rose-50 border-rose-200 text-rose-500 shadow-inner" : "bg-white border-slate-200 text-slate-400 hover:border-brand-500 hover:text-brand-500 hover:bg-brand-50 shadow-sm"}`}
+              >
+                <span className="material-icons-round text-2xl">
+                  {isWishlisted ? "favorite" : "favorite_border"}
+                </span>
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-3 mb-8 pb-6 border-b border-slate-100">
@@ -212,6 +253,17 @@ export default function GlobalModal({ event, onClose, navigateTo }) {
                 {event.eo || "TechLoca Official Partner"}
               </p>
             </div>
+
+            {!isExpired && (
+              <div className="ml-auto bg-emerald-50 px-4 py-2 rounded-2xl border border-emerald-100">
+                <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest leading-none">
+                  Sisa Kuota
+                </p>
+                <p className="text-lg font-black text-emerald-700 leading-none mt-1">
+                  {currentQuota} Slot
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-4 mb-8">
@@ -265,43 +317,56 @@ export default function GlobalModal({ event, onClose, navigateTo }) {
 
           <div className="mt-auto pt-6 border-t border-slate-100">
             <button
-              disabled={(isFull || isExpired) && !bookingSuccess}
+              disabled={((isFull || isExpired) && !bookingSuccess) || isAdmin}
               onClick={handleBooking}
               className={`w-full py-4 px-6 rounded-2xl font-bold transition-all duration-300 flex items-center justify-center gap-3 shadow-lg 
                 ${
-                  bookingSuccess
-                    ? "bg-emerald-500 hover:bg-emerald-600 text-white"
-                    : isFull || isExpired
-                      ? "bg-slate-100 text-slate-400 cursor-not-allowed shadow-none"
-                      : "bg-brand-600 hover:bg-brand-500 text-white shadow-brand-500/30"
+                  isAdmin
+                    ? "bg-slate-100 text-slate-400 cursor-not-allowed shadow-none border border-slate-200"
+                    : bookingSuccess
+                      ? "bg-emerald-500 hover:bg-emerald-600 text-white"
+                      : isFull || isExpired
+                        ? "bg-slate-100 text-slate-400 cursor-not-allowed shadow-none"
+                        : "bg-brand-600 hover:bg-brand-500 text-white shadow-brand-500/30"
                 }`}
             >
               <span className="material-icons-round text-sm">
                 {isBooking
                   ? "sync"
-                  : bookingSuccess
-                    ? "confirmation_number"
-                    : isExpired
-                      ? "event_busy"
-                      : isFull
-                        ? "block"
-                        : "local_activity"}
+                  : isAdmin
+                    ? "visibility"
+                    : bookingSuccess
+                      ? "confirmation_number"
+                      : isExpired
+                        ? "event_busy"
+                        : isFull
+                          ? "block"
+                          : "local_activity"}
               </span>
               {isBooking
                 ? "Memproses..."
-                : bookingSuccess
-                  ? "Lihat Status Tiket"
-                  : isExpired
-                    ? "Event Telah Selesai"
-                    : isFull
-                      ? "Kuota Penuh"
-                      : "Amankan Slot Sekarang"}
+                : isAdmin
+                  ? "Admin: Mode Lihat Saja"
+                  : bookingSuccess
+                    ? "Lihat Status Tiket"
+                    : isExpired
+                      ? "Event Selesai"
+                      : isFull
+                        ? "Kuota Habis"
+                        : "Amankan Slot Sekarang"}
             </button>
 
-            {(isExpired || isFull) && !bookingSuccess && (
-              <p className="text-center text-[10px] font-bold text-rose-500 uppercase mt-3 tracking-widest animate-pulse">
-                Pendaftaran sudah tidak tersedia
+            {isAdmin ? (
+              <p className="text-center text-[10px] font-bold text-amber-600 uppercase mt-3 tracking-widest">
+                Akun Admin tidak diizinkan memesan tiket
               </p>
+            ) : (
+              (isExpired || isFull) &&
+              !bookingSuccess && (
+                <p className="text-center text-[10px] font-black text-rose-500 uppercase mt-3 tracking-widest animate-pulse">
+                  Pendaftaran sudah tidak tersedia
+                </p>
+              )
             )}
           </div>
         </div>

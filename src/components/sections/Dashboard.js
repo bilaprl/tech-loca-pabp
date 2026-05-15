@@ -21,6 +21,107 @@ export default function Dashboard() {
   const [selectedTx, setSelectedTx] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
 
+  const [pesertaSertif, setPesertaSertif] = useState([]);
+  const [filterSertif, setFilterSertif] = useState("SEMUA");
+  const [daftarEvent, setDaftarEvent] = useState([]);
+  const [loadingId, setLoadingId] = useState(null);
+
+  const fetchPesertaSertif = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("transactions")
+        .select(
+          `id, status, events ( title ), profiles ( full_name, email ), certificates ( file_url )`,
+        )
+        .eq("status", "success");
+
+      if (error) throw error;
+
+      if (data) {
+        const formattedData = data.map((tr) => {
+          const hasCert = Array.isArray(tr.certificates)
+            ? tr.certificates.length > 0
+            : !!tr.certificates;
+          const certUrl = Array.isArray(tr.certificates)
+            ? tr.certificates[0]?.file_url
+            : tr.certificates?.file_url;
+
+          return {
+            id: tr.id,
+            file_url: certUrl || null,
+            nama_peserta: tr.profiles?.full_name || "Tanpa Nama",
+            email: tr.profiles?.email || "Tidak ada email",
+            event_name: tr.events?.title || "Event Selesai",
+            status_kirim: hasCert ? "TERKIRIM" : "MENUNGGU",
+          };
+        });
+
+        setPesertaSertif(formattedData);
+        setDaftarEvent(
+          Array.from(
+            new Set(formattedData.map((p) => p.event_name).filter(Boolean)),
+          ),
+        );
+      }
+    } catch (err) {
+      console.error(err.message);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "certificates") fetchPesertaSertif();
+  }, [activeTab]);
+
+  const filteredPeserta = pesertaSertif.filter((p) => {
+    if (filterSertif === "SEMUA") return true;
+    return p.event_name?.toUpperCase() === filterSertif.toUpperCase();
+  });
+
+  const handleKirimSertif = async (transactionId, email) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/pdf,image/*";
+
+    input.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      setLoadingId(transactionId);
+      try {
+        const fileExt = file.name.split(".").pop();
+        const fileName = `${transactionId}-${Date.now()}.${fileExt}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("certificates")
+          .upload(fileName, file, { upsert: true });
+
+        if (uploadError) throw uploadError;
+
+        const { data: publicData } = supabase.storage
+          .from("certificates")
+          .getPublicUrl(fileName);
+
+        // PERBAIKAN: Tambahkan parameter onConflict
+        const { error: dbError } = await supabase.from("certificates").upsert(
+          {
+            transaction_id: transactionId,
+            file_url: publicData.publicUrl,
+          },
+          { onConflict: "transaction_id" },
+        );
+
+        if (dbError) throw dbError;
+
+        await fetchPesertaSertif();
+      } catch (err) {
+        alert(`Gagal: ${err.message}`);
+      } finally {
+        setLoadingId(null);
+      }
+    };
+    input.click();
+  };
+
   // --- FORM STATE ---
   const [formData, setFormData] = useState({
     id: null,
@@ -130,7 +231,7 @@ export default function Dashboard() {
     fetchDashboardData();
   }, []);
 
-  // --- LOGIKA QR SCANNER (PERBAIKAN: VALIDASI LANGSUNG KE DB) ---
+  // --- LOGIKA QR SCANNER (PERBAIKAN: VALIDASI LANGSUNG KE DB BERDASARKAN ID) ---
   useEffect(() => {
     let scanner = null;
     if (
@@ -149,10 +250,17 @@ export default function Dashboard() {
 
       scanner.render(
         async (decodedText) => {
-          // Bersihkan ID dari spasi atau karakter aneh (sering jadi penyebab "not found")
-          const cleanId = decodedText.trim();
+          let cleanId = decodedText.trim();
 
-          // Cek langsung ke database biar pasti dapat data terbaru
+          if (cleanId.includes("/")) {
+            cleanId = cleanId.split("/").pop();
+          }
+
+          if (cleanId.startsWith("TL-TICKET-")) {
+            let withoutPrefix = cleanId.replace("TL-TICKET-", "");
+            cleanId = withoutPrefix.substring(0, 36);
+          }
+
           const { data: tx, error } = await supabase
             .from("transactions")
             .select(
@@ -166,7 +274,6 @@ export default function Dashboard() {
             return;
           }
 
-          // Validasi Event yang dipilih di dashboard
           if (tx.events.title !== selectedEventForCheckin) {
             alert(
               `Tiket Salah! Peserta ini terdaftar untuk event: ${tx.events.title}`,
@@ -178,7 +285,8 @@ export default function Dashboard() {
               "Pembayaran belum diverifikasi. Silakan cek bagian Verifikasi.",
             );
           } else {
-            await markAsPresent(cleanId);
+            // Gunakan tx.id dari database untuk kepastian data
+            await markAsPresent(tx.id);
           }
         },
         (err) => {
@@ -194,19 +302,23 @@ export default function Dashboard() {
           .catch((error) => console.error("Failed to clear scanner", error));
       }
     };
-  }, [activeTab, isCheckinSessionOpen, selectedEventForCheckin]); // Hapus 'participants' agar scanner tidak re-render terus
+  }, [activeTab, isCheckinSessionOpen, selectedEventForCheckin]);
 
   // --- LOGIKA HITUNG TRAFFIC (7 HARI TERAKHIR) ---
   const getTrafficData = () => {
     const counts = [0, 0, 0, 0, 0, 0, 0];
     const today = new Date();
+    // Set acuan hari ini sampai jam 23:59:59 agar presisi
+    today.setHours(23, 59, 59, 999);
 
     transactions.forEach((tx) => {
+      if (!tx.rawDate) return;
       const txDate = new Date(tx.rawDate);
-      const diffTime = Math.abs(today - txDate);
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) - 1;
-      if (diffDays < 7) {
-        counts[6 - diffDays]++;
+      const diffTime = today.getTime() - txDate.getTime();
+      const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+      if (diffDays >= 0 && diffDays < 7) {
+        counts[6 - diffDays]++; // 0 adalah 6 hari lalu, 6 adalah hari ini
       }
     });
 
@@ -474,8 +586,8 @@ export default function Dashboard() {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-            <div className="lg:col-span-8 bg-white p-10 rounded-[3rem] border border-slate-100 shadow-sm">
-              <div className="flex justify-between items-center mb-10">
+            <div className="lg:col-span-8 bg-white p-10 rounded-[3rem] border border-slate-100 shadow-sm flex flex-col">
+              <div className="flex justify-between items-center mb-8">
                 <div>
                   <h3 className="font-heading text-xl font-black text-dark">
                     Traffic Pendaftaran
@@ -486,24 +598,52 @@ export default function Dashboard() {
                 </div>
                 <div className="flex gap-2">
                   <span className="w-3 h-3 bg-brand-500 rounded-full"></span>
-                  <span className="w-3 h-3 bg-slate-100 rounded-full"></span>
+                  <span className="w-3 h-3 bg-brand-200 rounded-full"></span>
                 </div>
               </div>
-              <div className="h-64 flex items-end gap-3 justify-between pb-2">
-                {getTrafficData().map((h, i) => (
-                  <div
-                    key={i}
-                    className="flex-1 flex flex-col items-center gap-4"
-                  >
+
+              {/* --- PERBAIKAN GRAFIK DISINI --- */}
+              <div className="h-64 flex items-end gap-2 sm:gap-4 justify-between pb-2 mt-auto">
+                {getTrafficData().map((h, i) => {
+                  const labels = [
+                    "H-6",
+                    "H-5",
+                    "H-4",
+                    "H-3",
+                    "H-2",
+                    "Kemarin",
+                    "Hari Ini",
+                  ];
+                  return (
                     <div
-                      className={`w-full rounded-t-xl transition-all duration-1000 ${i === 6 ? "bg-brand-500 shadow-lg shadow-brand-500/20" : "bg-slate-50"}`}
-                      style={{ height: `${h}%` }}
-                    ></div>
-                    <span className="text-[10px] font-bold text-slate-400">
-                      Day {i + 1}
-                    </span>
-                  </div>
-                ))}
+                      key={i}
+                      className="flex-1 h-full flex flex-col items-center justify-end gap-3 group"
+                    >
+                      <div className="w-full flex items-end h-[85%] relative">
+                        <div
+                          className={`w-full rounded-xl transition-all duration-1000 ${
+                            i === 6
+                              ? "bg-brand-500 shadow-lg shadow-brand-500/30 group-hover:bg-brand-600"
+                              : h > 0
+                                ? "bg-brand-200 group-hover:bg-brand-300"
+                                : "bg-slate-100 group-hover:bg-slate-200"
+                          }`}
+                          style={{ height: `${Math.max(h, 4)}%` }} // Minimal tinggi 4% agar tetap terlihat
+                        >
+                          {/* Tooltip on Hover */}
+                          <div className="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-dark text-white text-[9px] font-bold py-1 px-2 rounded-lg pointer-events-none transition-opacity whitespace-nowrap z-10">
+                            {Math.round(h)}%
+                          </div>
+                        </div>
+                      </div>
+                      <span
+                        className={`text-[9px] sm:text-[10px] font-black uppercase tracking-tighter ${i === 6 ? "text-brand-600" : "text-slate-400"}`}
+                      >
+                        {labels[i]}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -539,9 +679,10 @@ export default function Dashboard() {
                         </span>
                       </p>
                       <p className="text-[10px] text-slate-400 mt-1 font-bold uppercase tracking-tighter">
-                        {new Date(log.rawDate).toLocaleTimeString([], {
+                        {new Date(log.rawDate).toLocaleTimeString("id-ID", {
                           hour: "2-digit",
                           minute: "2-digit",
+                          hour12: false,
                         })}{" "}
                         WIB
                       </p>
@@ -758,18 +899,6 @@ export default function Dashboard() {
           </div>
 
           <div className="lg:col-span-7 space-y-6">
-            <div className="bg-slate-900 rounded-[2.5rem] p-8 text-white relative overflow-hidden mb-4">
-              <div className="relative z-10">
-                <h4 className="text-xl font-bold mb-1">
-                  Live Katalog (Supabase)
-                </h4>
-                <p className="text-slate-400 text-xs font-medium">
-                  Klik icon mata untuk melihat preview di landing page.
-                </p>
-              </div>
-              <div className="absolute top-0 right-0 w-48 h-full bg-brand-500/10 blur-3xl pointer-events-none"></div>
-            </div>
-
             <div className="space-y-4">
               {events.map((ev) => (
                 <div
@@ -1384,17 +1513,159 @@ export default function Dashboard() {
 
       {/* --- 5. MODUL PENGELOLAAN SERTIFIKAT --- */}
       {activeTab === "certificates" && (
-        <div className="animate-in fade-in duration-500 space-y-8">
-          <div className="py-20 text-center bg-white rounded-[2.5rem] border border-slate-100">
-            <span className="material-icons-round text-slate-200 text-6xl mb-4">
-              workspace_premium
-            </span>
-            <h3 className="font-heading text-2xl font-bold text-dark mb-2">
-              Modul Sertifikat
-            </h3>
-            <p className="text-slate-400 font-bold text-sm">
-              Menunggu instruksi tabel certificates dari backend.
+        <div className="animate-in fade-in duration-500 space-y-6 text-slate-700">
+          {/* Sub-Header */}
+          <div className="flex flex-col gap-1">
+            <h2 className="text-xs font-black text-indigo-600 uppercase tracking-widest flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>
+              Penerbitan Sertifikat
+            </h2>
+            <p className="text-slate-400 text-xs font-medium">
+              Upload dan kirim sertifikat digital ke email peserta.
             </p>
+          </div>
+
+          {/* Filter Bar (Otomatis muncul berdasarkan event yang ada) */}
+          <div className="flex flex-wrap gap-3">
+            <button
+              onClick={() => setFilterSertif("SEMUA")}
+              className={`px-5 py-3 rounded-2xl border text-[11px] font-black tracking-wider flex items-center gap-2.5 transition-all shadow-sm uppercase ${
+                filterSertif === "SEMUA"
+                  ? "bg-[#eef2ff] border-indigo-200 text-indigo-600"
+                  : "bg-white border-slate-100 text-slate-400 hover:bg-slate-50"
+              }`}
+            >
+              <span className="material-icons-round text-base">apps</span>
+              SEMUA
+            </button>
+
+            {daftarEvent.map((namaEvent, index) => (
+              <button
+                key={index}
+                onClick={() => setFilterSertif(namaEvent)}
+                className={`px-5 py-3 rounded-2xl border text-[11px] font-black tracking-wider flex items-center gap-2.5 transition-all shadow-sm uppercase ${
+                  filterSertif === namaEvent
+                    ? "bg-[#eef2ff] border-indigo-200 text-indigo-600"
+                    : "bg-white border-slate-100 text-slate-400 hover:bg-slate-50"
+                }`}
+              >
+                <span className="material-icons-round text-base">stars</span>
+                {namaEvent}
+              </button>
+            ))}
+          </div>
+
+          {/* Tabel Utama */}
+          <div className="bg-white rounded-[2rem] shadow-[0_4px_25px_rgba(0,0,0,0.02)] border border-slate-100/80 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-100 text-[10px] font-black uppercase tracking-widest text-slate-400 bg-slate-50/50">
+                    <th className="py-5 px-8">Nama Peserta</th>
+                    <th className="py-5 px-8">Email / WhatsApp</th>
+                    <th className="py-5 px-8 text-center">Status Kirim</th>
+                    <th className="py-5 px-8 text-right">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50 text-xs font-bold text-slate-800">
+                  {filteredPeserta.length > 0 ? (
+                    filteredPeserta.map((peserta) => (
+                      <tr
+                        key={peserta.id}
+                        className="hover:bg-slate-50/30 transition-colors"
+                      >
+                        {/* Kolom Profil */}
+                        <td className="py-5 px-8 flex items-center gap-4">
+                          <div className="w-10 h-10 bg-slate-100 text-slate-500 rounded-full flex items-center justify-center font-extrabold text-sm border border-slate-200/50 uppercase">
+                            {peserta.nama_peserta?.charAt(0) || "P"}
+                          </div>
+                          <div>
+                            <div className="font-extrabold text-slate-900 text-sm">
+                              {peserta.nama_peserta}
+                            </div>
+                            <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold mt-0.5">
+                              {peserta.event_name}
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Kolom Kontak */}
+                        <td className="py-5 px-8 text-slate-500 font-medium align-middle">
+                          <div className="flex items-center gap-2">
+                            <span className="material-icons-round text-slate-400 text-sm">
+                              email
+                            </span>
+                            {peserta.email}
+                          </div>
+                        </td>
+
+                        {/* Kolom Badge Status */}
+                        <td className="py-5 px-8 text-center align-middle">
+                          {peserta.status_kirim === "TERKIRIM" ? (
+                            <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-600 px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider uppercase border border-emerald-100">
+                              <span className="material-icons-round text-xs font-black">
+                                check
+                              </span>
+                              TERKIRIM
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-500 px-3 py-1.5 rounded-lg text-[10px] font-black tracking-wider uppercase border border-slate-200/40">
+                              <span
+                                className="material-icons-round text-xs animate-spin"
+                                style={{ animationDuration: "3s" }}
+                              >
+                                update
+                              </span>
+                              MENUNGGU
+                            </span>
+                          )}
+                        </td>
+
+                        {/* Kolom Tombol Aksi */}
+                        <td className="py-5 px-8 text-right align-middle">
+                          <button
+                            onClick={() =>
+                              handleKirimSertif(peserta.id, peserta.email)
+                            }
+                            disabled={loadingId === peserta.id}
+                            className={`font-extrabold px-5 py-2.5 rounded-xl shadow-md transition-all text-[11px] tracking-wider uppercase inline-flex items-center gap-2 disabled:opacity-50 ${
+                              peserta.status_kirim === "TERKIRIM"
+                                ? "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                                : "bg-[#4f46e5] hover:bg-[#4338ca] text-white shadow-indigo-100"
+                            }`}
+                          >
+                            <span className="material-icons-round text-xs">
+                              {peserta.status_kirim === "TERKIRIM"
+                                ? "sync"
+                                : "upload_file"}
+                            </span>
+                            {loadingId === peserta.id
+                              ? "Proses..."
+                              : peserta.status_kirim === "TERKIRIM"
+                                ? "Kirim Ulang"
+                                : "Kirim Sertif"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td
+                        colSpan={4}
+                        className="py-20 text-center text-slate-400 font-medium"
+                      >
+                        <div className="flex flex-col items-center gap-2">
+                          <span className="material-icons-round text-4xl text-slate-200">
+                            Inbox
+                          </span>
+                          Belum ada peserta yang menyelesaikan event.
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}

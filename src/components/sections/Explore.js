@@ -9,6 +9,7 @@ export default function Explore({ onOpenModal, navigateTo }) {
   const [activeLocation, setActiveLocation] = useState("Semua Lokasi");
   const [wishlist, setWishlist] = useState([]);
   const [user, setUser] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -19,16 +20,17 @@ export default function Explore({ onOpenModal, navigateTo }) {
       } = await supabase.auth.getUser();
       setUser(currentUser);
 
-      const { data: eventsData, error: eventsError } = await supabase
-        .from("events")
-        .select("*")
-        .order("date", { ascending: true });
-
-      if (!eventsError && eventsData) {
-        setEvents(eventsData);
-      }
-
       if (currentUser) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", currentUser.id)
+          .maybeSingle(); // Aman dari error 406
+
+        if (profile?.role === "admin") {
+          setIsAdmin(true);
+        }
+
         const { data: wishlistData } = await supabase
           .from("wishlist")
           .select("event_id")
@@ -37,6 +39,16 @@ export default function Explore({ onOpenModal, navigateTo }) {
         if (wishlistData) {
           setWishlist(wishlistData.map((item) => item.event_id));
         }
+      }
+
+      // TARIK DARI VIEW SQL YANG BARU KITA BUAT
+      const { data: eventsData, error: eventsError } = await supabase
+        .from("events_with_slots")
+        .select("*")
+        .order("date", { ascending: true });
+
+      if (!eventsError && eventsData) {
+        setEvents(eventsData);
       }
 
       setLoading(false);
@@ -62,9 +74,12 @@ export default function Explore({ onOpenModal, navigateTo }) {
 
   const toggleWishlist = async (e, eventId) => {
     e.stopPropagation();
-
     if (!user) {
       alert("Silakan login terlebih dahulu!");
+      return;
+    }
+    if (isAdmin) {
+      alert("Admin hanya memiliki akses lihat (Read-Only).");
       return;
     }
 
@@ -110,6 +125,11 @@ export default function Explore({ onOpenModal, navigateTo }) {
         </h1>
         <p className="text-slate-500 text-lg mb-8 max-w-2xl font-medium">
           Temukan acara teknologi terbaik untuk karir profesionalmu.
+          {isAdmin && (
+            <span className="ml-2 inline-block px-3 py-1 bg-amber-100 text-amber-700 text-xs rounded-full font-bold">
+              Admin View Mode
+            </span>
+          )}
         </p>
 
         <div className="flex flex-col gap-4 bg-white p-4 rounded-[2.5rem] border border-slate-100 shadow-sm">
@@ -150,7 +170,8 @@ export default function Explore({ onOpenModal, navigateTo }) {
       {filteredEvents.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
           {filteredEvents.map((ev) => {
-            const isFull = ev.quota <= 0;
+            // Membaca sisa_slot dari view database
+            const isFull = ev.sisa_slot <= 0;
             const isExpired = new Date(ev.date) < new Date();
             const isWishlisted = wishlist.includes(ev.id);
 
@@ -167,16 +188,18 @@ export default function Explore({ onOpenModal, navigateTo }) {
                     alt={ev.title}
                   />
 
-                  <button
-                    onClick={(e) => toggleWishlist(e, ev.id)}
-                    className="absolute top-5 right-5 w-11 h-11 rounded-2xl bg-white/40 backdrop-blur-md border border-white/40 flex items-center justify-center hover:bg-white hover:scale-110 transition-all z-10 shadow-lg"
-                  >
-                    <span
-                      className={`material-icons-round text-2xl ${isWishlisted ? "text-rose-500" : "text-white group-hover:text-slate-300"}`}
+                  {!isAdmin && (
+                    <button
+                      onClick={(e) => toggleWishlist(e, ev.id)}
+                      className="absolute top-5 right-5 w-11 h-11 rounded-2xl bg-white/40 backdrop-blur-md border border-white/40 flex items-center justify-center hover:bg-white hover:scale-110 transition-all z-10 shadow-lg"
                     >
-                      {isWishlisted ? "favorite" : "favorite_border"}
-                    </span>
-                  </button>
+                      <span
+                        className={`material-icons-round text-2xl ${isWishlisted ? "text-rose-500" : "text-white group-hover:text-slate-300"}`}
+                      >
+                        {isWishlisted ? "favorite" : "favorite_border"}
+                      </span>
+                    </button>
+                  )}
 
                   <div className="absolute bottom-4 left-4 flex gap-2">
                     <span className="px-4 py-2 bg-brand-500 text-white text-[9px] font-black uppercase tracking-widest rounded-full shadow-lg">
@@ -242,17 +265,20 @@ export default function Explore({ onOpenModal, navigateTo }) {
                         className={`text-[10px] font-black px-3 py-1 rounded-full ${isExpired ? "bg-slate-100 text-slate-500" : isFull ? "bg-rose-100 text-rose-600" : "bg-brand-50 text-brand-600"}`}
                       >
                         {isExpired
-                          ? "Sudah Terlewat"
+                          ? "Pendaftaran Ditutup"
                           : isFull
-                            ? "Full Booked"
-                            : `${ev.quota} Slot Tersisa`}
+                            ? "Kuota Habis"
+                            : `${ev.sisa_slot} Slot Tersisa`}
                       </span>
                     </div>
                     <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
                       <div
                         className={`h-full rounded-full transition-all duration-1000 ${isExpired ? "bg-slate-300" : isFull ? "bg-rose-500" : "bg-brand-500"}`}
                         style={{
-                          width: `${isExpired ? 100 : isFull ? 100 : Math.min(100, (ev.quota / 50) * 100)}%`,
+                          width:
+                            isExpired || isFull
+                              ? "100%"
+                              : `${Math.min(100, (ev.sisa_slot / ev.quota) * 100)}%`,
                         }}
                       ></div>
                     </div>
