@@ -1,45 +1,60 @@
 import 'package:flutter/material.dart';
 
-class FaqScreen extends StatelessWidget {
+class FaqScreen extends StatefulWidget {
   const FaqScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    // Data FAQ dari web yang kamu berikan
-    final List<Map<String, dynamic>> faqData = [
-      {
-        "id": 1,
-        "q": "Bagaimana cara mencetak atau mengunduh E-Ticket?",
-        "a":
-            "E-Ticket dapat diunduh di menu 'Tiket Saya' setelah kamu menyelesaikan proses registrasi. Tiket akan berbentuk file PDF yang berisi QR Code eksklusif milikmu.",
-      },
-      {
-        "id": 2,
-        "q": "Apakah saya bisa membatalkan tiket yang sudah diamankan?",
-        "a":
-            "Pembatalan hanya dapat dilakukan jika status tiket masih 'Menunggu Pembayaran'. Jika tiket sudah terkonfirmasi (Confirmed), tiket tidak dapat dibatalkan sesuai kebijakan sistem kami.",
-      },
-      {
-        "id": 3,
-        "q": "Bagaimana sistem absensi / check-in di lokasi acara?",
-        "a":
-            "Sangat mudah! Cukup tunjukkan QR Code E-Ticket kamu melalui layar HP. Tim TechLoca di lokasi akan men-scan kode tersebut untuk memverifikasi kehadiranmu dengan cepat.",
-      },
-      {
-        "id": 4,
-        "q": "Kapan sertifikat digital akan saya dapatkan?",
-        "a":
-            "Sertifikat akan otomatis diterbitkan ke halaman 'Kumpulan Sertifikat' dalam waktu maksimal 2x24 jam setelah acara selesai, dengan syarat kamu telah di-scan hadir oleh panitia di lokasi.",
-      },
-      {
-        "id": 5,
-        "q":
-            "Apakah institusi/komunitas saya bisa berkolaborasi mengadakan event?",
-        "a":
-            "Tentu saja! TechLoca dikelola secara eksklusif oleh tim internal kami, namun kami sangat terbuka untuk partnership. Jika kamu punya event IT dan ingin bekerjasama agar tayang di platform kami, silakan hubungi tim kami via WhatsApp.",
-      },
-    ];
+  State<FaqScreen> createState() => _FaqScreenState();
+}
 
+class _FaqScreenState extends State<FaqScreen> {
+  // Data FAQ disesuaikan dengan fitur riel dari tabel database backend
+  final List<Map<String, dynamic>> faqData = [
+    {
+      "id": 1,
+      "q": "Bagaimana cara mencetak atau mengunduh E-Ticket?",
+      "a":
+          "E-Ticket dapat diakses langsung di menu 'Tiket Saya' segera setelah kamu melakukan pendaftaran slot. Tiket dilengkapi dengan QR Code enkreditasi unik untuk proses registrasi masuk.",
+    },
+    {
+      "id": 2,
+      "q": "Apakah saya bisa membatalkan tiket yang sudah diamankan?",
+      "a":
+          "Pembatalan pesanan secara mandiri hanya dapat dilakukan jika status transaksi kamu masih dalam tahap verifikasi admin web. Jika status sudah 'CONFIRMED', tombol pembatalan otomatis dinonaktifkan.",
+    },
+    {
+      "id": 3,
+      "q": "Bagaimana sistem absensi / check-in di lokasi acara?",
+      "a":
+          "Sangat praktis! Kamu hanya perlu menunjukkan QR Code yang ada pada kartu menu 'Tiket Saya' lewat layar HP. Panitia acara di meja registrasi akan memindai kode tersebut untuk mengubah status kehadiranmu menjadi Check-In secara real-time.",
+    },
+    {
+      "id": 4,
+      "q": "Kapan sertifikat digital akan saya dapatkan?",
+      "a":
+          "Sertifikat digital akan otomatis terbit dan masuk ke menu 'Kumpulan Sertifikat' setelah status pesanan kamu ditandai sudah melakukan check-in oleh sistem administrasi pasca acara selesai.",
+    },
+    {
+      "id": 5,
+      "q":
+          "Apakah institusi/komunitas saya bisa berkolaborasi mengadakan event?",
+      "a":
+          "Tentu saja! Platform TechLoca sangat terbuka untuk partnership publikasi event IT. Kamu bisa menghubungi nomor administrasi WhatsApp yang tercantum di menu Profile untuk pengajuan integrasi database event baru.",
+    },
+  ];
+
+  // FUNGSI PULL-TO-REFRESH (Pusat bantuan langsung merespon refresh instan)
+  Future<void> _handleRefresh() async {
+    await Future.delayed(const Duration(milliseconds: 800));
+    if (mounted) {
+      setState(() {
+        // Logika refresh lokal untuk membersihkan cache rendering komponen UI
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
@@ -57,60 +72,69 @@ class FaqScreen extends StatelessWidget {
           ),
         ),
       ),
-      body: ListView.builder(
-        padding: const EdgeInsets.all(20),
-        itemCount: faqData.length,
-        itemBuilder: (context, index) {
-          final faq = faqData[index];
-          return Container(
-            margin: const EdgeInsets.only(bottom: 16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.5),
-                  blurRadius: 10,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: ExpansionTile(
-              shape: const Border(), // Menghilangkan garis border bawaan
-              leading: CircleAvatar(
-                backgroundColor: const Color(0xFFEEF2FF),
-                child: Text(
-                  "${faq['id']}",
-                  style: const TextStyle(
-                    color: Color(0xFF4F46E5),
-                    fontWeight: FontWeight.bold,
+      // INTEGRASI FITUR PULL-TO-REFRESH
+      body: RefreshIndicator(
+        onRefresh: _handleRefresh,
+        color: const Color(0xFF4F46E5),
+        child: ListView.builder(
+          physics:
+              const AlwaysScrollableScrollPhysics(), // Menjamin area layar selalu responsif ditarik
+          padding: const EdgeInsets.all(20),
+          itemCount: faqData.length,
+          itemBuilder: (context, index) {
+            final faq = faqData[index];
+            return Container(
+              margin: const EdgeInsets.only(bottom: 16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(
+                      alpha: 0.04,
+                    ), // 🌟 PERBAIKAN: Dari 0.5 menjadi 0.04 agar bayangan halus/estetik
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
                   ),
-                ),
+                ],
               ),
-              title: Text(
-                faq['q'],
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                  color: Color(0xFF1E293B),
-                ),
-              ),
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+              child: ExpansionTile(
+                shape: const Border(),
+                leading: CircleAvatar(
+                  backgroundColor: const Color(0xFFEEF2FF),
                   child: Text(
-                    faq['a'],
-                    style: TextStyle(
-                      color: Colors.grey.shade600,
-                      fontSize: 13,
-                      height: 1.5,
+                    "${faq['id']}",
+                    style: const TextStyle(
+                      color: Color(0xFF4F46E5),
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
-              ],
-            ),
-          );
-        },
+                title: Text(
+                  faq['q'],
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    color: Color(0xFF1E293B),
+                  ),
+                ),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                    child: Text(
+                      faq['a'],
+                      style: TextStyle(
+                        color: Colors.grey.shade600,
+                        fontSize: 13,
+                        height: 1.5,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }

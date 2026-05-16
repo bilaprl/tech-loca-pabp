@@ -1,7 +1,101 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../event_model.dart';
 
-class CertificatesScreen extends StatelessWidget {
+class CertificatesScreen extends StatefulWidget {
   const CertificatesScreen({super.key});
+
+  @override
+  State<CertificatesScreen> createState() => _CertificatesScreenState();
+}
+
+class _CertificatesScreenState extends State<CertificatesScreen> {
+  List<Map<String, dynamic>> certificates = [];
+  bool isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchCertificates();
+  }
+
+  // FUNGSI AMBIL DATA SERTIFIKAT DENGAN JOIN MULTI-TABEL
+  Future<void> _fetchCertificates() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+
+    try {
+      // Join Query: certificates -> transactions -> events
+      final response = await Supabase.instance.client
+          .from('certificates')
+          .select('*, transactions!inner(*, events(*))')
+          .eq('transactions.user_id', user.id)
+          .order('created_at', ascending: false);
+
+      final List<Map<String, dynamic>> loadedCertificates = [];
+
+      for (var item in response as List) {
+        final transaction = item['transactions'];
+        if (transaction != null && transaction['events'] != null) {
+          final eventObj = Event.fromJson(transaction['events']);
+
+          // 🌟 PERBAIKAN 1: Amankan pemotongan string UUID sertifikat agar kebal dari null data crash
+          final String rawCertId = item['id']?.toString() ?? '';
+          final String safeCertId = rawCertId.length >= 8
+              ? rawCertId.substring(0, 8).toUpperCase()
+              : 'UNKNOWN';
+
+          // 🌟 PERBAIKAN 2: Amankan pemotongan format tanggal ISO murni dari database
+          final String rawCreatedAt = item['created_at']?.toString() ?? '';
+          final String parsedDate = rawCreatedAt.contains('T')
+              ? rawCreatedAt.split('T')[0]
+              : (rawCreatedAt.isNotEmpty ? rawCreatedAt : '-');
+
+          loadedCertificates.add({
+            'id': safeCertId, // Credential ID aman
+            'file_url': item['file_url'] ?? '',
+            'date': parsedDate,
+            'event': eventObj,
+          });
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          certificates = loadedCertificates;
+          isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint("Error Fetch Certificates: $e");
+      if (mounted) setState(() => isLoading = false);
+    }
+  }
+
+  // FUNGSI BUKA URL PDF SERTIFIKAT
+  Future<void> _downloadCertificate(String urlString) async {
+    if (urlString.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("File URL sertifikat belum tersedia")),
+      );
+      return;
+    }
+
+    final Uri url = Uri.parse(urlString.trim());
+    if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Gagal membuka file sertifikat")),
+        );
+      }
+    }
+  }
+
+  // FUNGSI PULL-TO-REFRESH
+  Future<void> _handleRefresh() async {
+    await _fetchCertificates();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -24,46 +118,54 @@ class CertificatesScreen extends StatelessWidget {
                 fontWeight: FontWeight.w900,
                 color: Color(0xFFF59E0B),
               ),
-            ), // Warna oranye
+            ),
           ],
         ),
         centerTitle: true,
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              "Apresiasi atas dedikasi dan partisipasimu. Unduh sertifikat digital dengan Credential ID resmi dari setiap acara TechLoca yang telah kamu selesaikan.",
-              style: TextStyle(color: Colors.grey, fontSize: 14, height: 1.5),
-            ),
-            const SizedBox(height: 24),
+      body: RefreshIndicator(
+        onRefresh: _handleRefresh,
+        color: const Color(0xFF4F46E5),
+        child: isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : certificates.isEmpty
+            ? ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(20),
+                children: [
+                  SizedBox(height: MediaQuery.of(context).size.height * 0.2),
+                  const Center(
+                    child: Text(
+                      "Belum ada sertifikat yang diterbitkan.\nSelesaikan event kamu terlebih dahulu!",
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.grey, height: 1.5),
+                    ),
+                  ),
+                ],
+              )
+            : ListView.builder(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(20),
+                itemCount: certificates.length,
+                itemBuilder: (context, index) {
+                  final cert = certificates[index];
+                  final Event event = cert['event'];
 
-            // Kartu Sertifikat 1
-            _buildCertificateCard(
-              title: "Web Dev Bootcamp Unsil",
-              organizer: "Informatika Unsil",
-              date: "24 Mei 2026",
-              id: "TL-C2026-0001X",
-              img:
-                  "https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?q=80&w=800",
-            ),
-            const SizedBox(height: 20),
-
-            // Kartu Sertifikat 2
-            _buildCertificateCard(
-              title: "UI/UX Masterclass",
-              organizer: "Tasik Design Hub",
-              date: "02 Juni 2026",
-              id: "TL-C2026-0002X",
-              img:
-                  "https://images.unsplash.com/photo-1561070791-2526d30994b5?q=80&w=600",
-            ),
-          ],
-        ),
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 20),
+                    child: _buildCertificateCard(
+                      title: event.title,
+                      organizer: event.eo,
+                      date: cert['date'],
+                      id: "TL-CERT-${cert['id']}",
+                      img: event.imageUrl,
+                      fileUrl: cert['file_url'],
+                    ),
+                  );
+                },
+              ),
       ),
     );
   }
@@ -75,16 +177,14 @@ class CertificatesScreen extends StatelessWidget {
     required String date,
     required String id,
     required String img,
+    required String fileUrl,
   }) {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: Colors.amber.shade200,
-          width: 1.5,
-        ), // Border kuning halus
+        border: Border.all(color: Colors.amber.shade200, width: 1.5),
         boxShadow: [
           BoxShadow(
             color: Colors.amber.withValues(alpha: 0.05),
@@ -96,7 +196,7 @@ class CertificatesScreen extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Bagian Kiri: Gambar
+          // Bagian Kiri: Gambar Cover Event
           Stack(
             children: [
               ClipRRect(
@@ -106,6 +206,15 @@ class CertificatesScreen extends StatelessWidget {
                   width: 100,
                   height: 160,
                   fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) => Container(
+                    width: 100,
+                    height: 160,
+                    color: Colors.grey.shade200,
+                    child: const Icon(
+                      Icons.image_not_supported,
+                      color: Colors.grey,
+                    ),
+                  ),
                 ),
               ),
               Positioned(
@@ -128,12 +237,11 @@ class CertificatesScreen extends StatelessWidget {
           ),
           const SizedBox(width: 16),
 
-          // Bagian Kanan: Detail
+          // Bagian Kanan: Detail Informasi Sertifikat
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Badge Verified
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 8,
@@ -167,16 +275,16 @@ class CertificatesScreen extends StatelessWidget {
                 const SizedBox(height: 8),
                 Text(
                   title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    fontSize: 16,
+                    fontSize: 15,
                     fontWeight: FontWeight.w900,
                     color: Color(0xFF0F172A),
                     height: 1.2,
                   ),
                 ),
                 const SizedBox(height: 8),
-
-                // Info Penyelenggara & Tanggal
                 Row(
                   children: [
                     const Icon(
@@ -187,7 +295,9 @@ class CertificatesScreen extends StatelessWidget {
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        "Penyelenggara: $organizer",
+                        organizer.isEmpty ? "Penyelenggara" : "EO: $organizer",
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           fontSize: 11,
                           color: Colors.grey,
@@ -217,8 +327,6 @@ class CertificatesScreen extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 8),
-
-                // Credential ID
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 8,
@@ -229,7 +337,7 @@ class CertificatesScreen extends StatelessWidget {
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Text(
-                    "ID: $id",
+                    id,
                     style: const TextStyle(
                       fontSize: 10,
                       color: Colors.grey,
@@ -239,13 +347,11 @@ class CertificatesScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 12),
-
-                // Tombol Unduh & Share
                 Row(
                   children: [
                     Expanded(
                       child: ElevatedButton.icon(
-                        onPressed: () {},
+                        onPressed: () => _downloadCertificate(fileUrl),
                         icon: const Icon(
                           Icons.picture_as_pdf_rounded,
                           size: 14,
@@ -260,10 +366,8 @@ class CertificatesScreen extends StatelessWidget {
                           ),
                         ),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(
-                            0xFF0F172A,
-                          ), // Warna gelap seperti web
-                          padding: const EdgeInsets.symmetric(vertical: 0),
+                          backgroundColor: const Color(0xFF0F172A),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
                           ),
@@ -282,7 +386,14 @@ class CertificatesScreen extends StatelessWidget {
                           size: 16,
                           color: Colors.grey,
                         ),
-                        onPressed: () {},
+                        onPressed: () {
+                          if (fileUrl.trim().isEmpty) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text("Link sertifikat disalin!"),
+                            ),
+                          );
+                        },
                         constraints: const BoxConstraints(),
                         padding: const EdgeInsets.all(8),
                       ),

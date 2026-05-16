@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import '../event_model.dart';
 import 'detail_event_screen.dart';
 import '../services/ticket_service.dart';
@@ -13,38 +15,150 @@ class TicketsScreen extends StatefulWidget {
 class _TicketsScreenState extends State<TicketsScreen>
     with TickerProviderStateMixin {
   late TabController _tabController;
-
-  Map<dynamic, dynamic>? offlineTicket;
+  List<Map<String, dynamic>> activeTickets = [];
+  List<Map<String, dynamic>> historyTickets = [];
+  bool isLoading = true;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _initOfflineData();
+    _fetchTicketsData();
   }
 
-  void _initOfflineData() {
-    final savedData = TicketService.getSavedTicket();
-    if (savedData != null) {
-      setState(() {
-        offlineTicket = savedData;
-      });
-    } else {
-      // Jika pertama kali buka, simpan data tiket pertama ke cache
-      if (mockEvents.isNotEmpty) {
-        final dummyToCache = {
-          "title": mockEvents[0].title,
-          "id": mockEvents[0].id,
-          "date": mockEvents[0].date,
-          "venue": mockEvents[0].venue,
-          "orderId": "TL-88291029",
-        };
-        TicketService.saveTicket(dummyToCache);
+  Future<void> _fetchTicketsData() async {
+    final user = Supabase.instance.client.auth.currentUser;
+
+    if (user == null) {
+      final savedData = TicketService.getSavedTicket();
+      if (savedData != null && savedData['offline_list'] != null) {
+        final List<Map<String, dynamic>> offlineList = [];
+        for (var cache in savedData['offline_list']) {
+          offlineList.add({
+            'transaction_id': cache['transaction_id'],
+            'status': cache['status'],
+            'qr_string': cache['qr_string'],
+            'is_checked_in': cache['is_checked_in'],
+            'created_at': cache['created_at'],
+            'event': Event.fromJson(cache['event_data']),
+          });
+        }
+        if (mounted) {
+          setState(() {
+            activeTickets = offlineList;
+            isLoading = false;
+          });
+        }
+      } else {
+        if (mounted) setState(() => isLoading = false);
+      }
+      return;
+    }
+
+    try {
+      final response = await Supabase.instance.client
+          .from('transactions')
+          .select('*, events(*)')
+          .eq('user_id', user.id)
+          .order('created_at', ascending: false);
+
+      final List<Map<String, dynamic>> activeList = [];
+      final List<Map<String, dynamic>> historyList = [];
+
+      for (var item in response as List) {
+        if (item['events'] != null) {
+          final eventObj = Event.fromJson(item['events']);
+          final ticketMap = {
+            'transaction_id': item['id'],
+            'status': item['status'] ?? 'pending',
+            'qr_string': item['qr_code_string'] ?? '',
+            'is_checked_in': item['is_checked_in'] ?? false,
+            'created_at': item['created_at'] ?? '',
+            'event': eventObj,
+            'event_data': item['events'],
+          };
+
+          if (item['status'] == 'cancelled' || item['is_checked_in'] == true) {
+            historyList.add(ticketMap);
+          } else {
+            activeList.add(ticketMap);
+          }
+        }
+      }
+
+      if (activeList.isNotEmpty) {
+        final List<Map<String, dynamic>> cacheReadyList = activeList.map((t) {
+          return {
+            'transaction_id': t['transaction_id'],
+            'status': t['status'],
+            'qr_string': t['qr_string'],
+            'is_checked_in': t['is_checked_in'],
+            'created_at': t['created_at'],
+            'event_data': t['event_data'],
+          };
+        }).toList();
+
+        await TicketService.saveTicket({'offline_list': cacheReadyList});
+      }
+
+      if (mounted) {
         setState(() {
-          offlineTicket = dummyToCache;
+          activeTickets = activeList;
+          historyTickets = historyList;
+          isLoading = false;
         });
       }
+    } catch (e) {
+      debugPrint("Error Fetch / Sinyal Offline: $e");
+      final savedData = TicketService.getSavedTicket();
+      if (savedData != null && savedData['offline_list'] != null) {
+        final List<Map<String, dynamic>> offlineList = [];
+        for (var cache in savedData['offline_list']) {
+          offlineList.add({
+            'transaction_id': cache['transaction_id'],
+            'status': cache['status'],
+            'qr_string': cache['qr_string'],
+            'is_checked_in': cache['is_checked_in'],
+            'created_at': cache['created_at'],
+            'event': Event.fromJson(cache['event_data']),
+          });
+        }
+        if (mounted) {
+          setState(() {
+            activeTickets = offlineList;
+            isLoading = false;
+          });
+        }
+      } else {
+        if (mounted) setState(() => isLoading = false);
+      }
     }
+  }
+
+  Future<void> _cancelTicket(String transactionId) async {
+    try {
+      await Supabase.instance.client
+          .from('transactions')
+          .update({'status': 'cancelled'})
+          .eq('id', transactionId);
+
+      _fetchTicketsData();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Pesanan berhasil dibatalkan"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint("Error Cancel Ticket: $e");
+    }
+  }
+
+  Future<void> _handleRefresh() async {
+    await _fetchTicketsData();
   }
 
   @override
@@ -73,29 +187,92 @@ class _TicketsScreenState extends State<TicketsScreen>
       body: TabBarView(
         controller: _tabController,
         children: [
-          // Ganti isi ListView di Tab 1 dengan ini:
-          ListView(
-            padding: const EdgeInsets.all(20),
-            children: mockEvents.asMap().entries.map((entry) {
-              int index = entry.key; // Ini adalah 'index' yang dicari Flutter
-              var event = entry.value;
+          RefreshIndicator(
+            onRefresh: _handleRefresh,
+            color: const Color(0xFF4F46E5),
+            child: isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : activeTickets.isEmpty
+                ? ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: [
+                      SizedBox(
+                        height: MediaQuery.of(context).size.height * 0.25,
+                      ),
+                      const Center(
+                        child: Text(
+                          "Belum ada tiket aktif.",
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                      ),
+                    ],
+                  )
+                : ListView.builder(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.all(20),
+                    itemCount: activeTickets.length,
+                    itemBuilder: (context, index) {
+                      final ticket = activeTickets[index];
+                      // 🌟 PERBAIKAN 1: Berikan pelindung split agar aman dari out of bounds error
+                      final String rawDate =
+                          ticket['created_at']?.toString() ?? '';
+                      final String parsedOrderDate = rawDate.contains('T')
+                          ? rawDate.split('T')[0]
+                          : (rawDate.isNotEmpty ? rawDate : '-');
 
-              return _buildTicketCard(
-                event: event,
-                status: index == 0 ? "confirmed" : "pending",
-                orderId: offlineTicket != null && index == 0
-                    ? offlineTicket!['orderId']
-                    : "TL-882910${29 + index}",
-                orderDate: "12 Mei 2026",
-                index: index,
-              );
-            }).toList(),
+                      return _buildTicketCard(
+                        transactionId: ticket['transaction_id'],
+                        event: ticket['event'],
+                        status: ticket['status'],
+                        qrString: ticket['qr_string'],
+                        orderDate: parsedOrderDate,
+                      );
+                    },
+                  ),
           ),
-          const Center(
-            child: Text(
-              "Belum ada riwayat tiket.",
-              style: TextStyle(color: Colors.grey),
-            ),
+          RefreshIndicator(
+            onRefresh: _handleRefresh,
+            color: const Color(0xFF4F46E5),
+            child: isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : historyTickets.isEmpty
+                ? ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: [
+                      SizedBox(
+                        height: MediaQuery.of(context).size.height * 0.25,
+                      ),
+                      const Center(
+                        child: Text(
+                          "Belum ada riwayat tiket.",
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                      ),
+                    ],
+                  )
+                : ListView.builder(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.all(20),
+                    itemCount: historyTickets.length,
+                    itemBuilder: (context, index) {
+                      final ticket = historyTickets[index];
+                      // 🌟 PERBAIKAN 2: Berikan pelindung split penangkal crash yang sama pada riwayat
+                      final String rawDate =
+                          ticket['created_at']?.toString() ?? '';
+                      final String parsedOrderDate = rawDate.contains('T')
+                          ? rawDate.split('T')[0]
+                          : (rawDate.isNotEmpty ? rawDate : '-');
+
+                      return _buildTicketCard(
+                        transactionId: ticket['transaction_id'],
+                        event: ticket['event'],
+                        status: ticket['status'],
+                        qrString: ticket['qr_string'],
+                        orderDate: parsedOrderDate,
+                        isHistory: true,
+                      );
+                    },
+                  ),
           ),
         ],
       ),
@@ -103,13 +280,15 @@ class _TicketsScreenState extends State<TicketsScreen>
   }
 
   Widget _buildTicketCard({
+    required String transactionId,
     required Event event,
     required String status,
-    required String orderId,
+    required String qrString,
     required String orderDate,
-    required int index,
+    bool isHistory = false,
   }) {
-    bool isConfirmed = status == "confirmed";
+    bool isConfirmed = status.toLowerCase() == "confirmed";
+    bool isCancelled = status.toLowerCase() == "cancelled";
 
     return Container(
       margin: const EdgeInsets.only(bottom: 20),
@@ -142,22 +321,19 @@ class _TicketsScreenState extends State<TicketsScreen>
                   ClipRRect(
                     borderRadius: BorderRadius.circular(12),
                     child: Image.network(
-                      event.img,
+                      event.imageUrl,
                       width: 60,
                       height: 60,
                       fit: BoxFit.cover,
-                      // TAMBAHKAN INI: Supaya kalau offline tidak muncul kotak kuning-hitam
-                      errorBuilder: (context, error, stackTrace) {
-                        return Container(
-                          width: 60,
-                          height: 60,
-                          color: Colors.grey.shade200,
-                          child: const Icon(
-                            Icons.image_not_supported,
-                            color: Colors.grey,
-                          ),
-                        );
-                      },
+                      errorBuilder: (context, error, stackTrace) => Container(
+                        width: 60,
+                        height: 60,
+                        color: Colors.grey.shade200,
+                        child: const Icon(
+                          Icons.image_not_supported,
+                          color: Colors.grey,
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 16),
@@ -173,16 +349,24 @@ class _TicketsScreenState extends State<TicketsScreen>
                           decoration: BoxDecoration(
                             color: isConfirmed
                                 ? const Color(0xFFDCFCE7)
+                                : isCancelled
+                                ? const Color(0xFFFEE2E2)
                                 : const Color(0xFFFEF3C7),
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Text(
-                            isConfirmed ? "CONFIRMED" : "MENUNGGU PEMBAYARAN",
+                            isConfirmed
+                                ? "CONFIRMED"
+                                : isCancelled
+                                ? "CANCELLED"
+                                : "MENUNGGU VERIFIKASI",
                             style: TextStyle(
                               fontSize: 9,
                               fontWeight: FontWeight.bold,
                               color: isConfirmed
                                   ? const Color(0xFF166534)
+                                  : isCancelled
+                                  ? const Color(0xFF991B1B)
                                   : const Color(0xFF92400E),
                             ),
                           ),
@@ -196,9 +380,8 @@ class _TicketsScreenState extends State<TicketsScreen>
                           ),
                         ),
                         const SizedBox(height: 4),
-                        // INFO ORDER ID & TANGGAL PESAN (BARU)
                         Text(
-                          "ID: #$orderId • Dipesan $orderDate",
+                          "ID: #${transactionId.substring(0, 8)}... • Dipesan $orderDate",
                           style: const TextStyle(
                             fontSize: 10,
                             color: Colors.grey,
@@ -213,16 +396,17 @@ class _TicketsScreenState extends State<TicketsScreen>
               ),
             ),
           ),
-
           const Divider(height: 1, color: Color(0xFFF1F5F9)),
-
           Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
               children: [
                 _buildMiniDetail(
                   Icons.calendar_today_rounded,
-                  event.date,
+                  // 🌟 PERBAIKAN 3: Amankan pemotongan string tanggal untuk file event di mini detail
+                  event.date.contains('T')
+                      ? event.date.split('T')[0]
+                      : event.date,
                   const Color(0xFFEF4444),
                 ),
                 const SizedBox(height: 8),
@@ -234,164 +418,168 @@ class _TicketsScreenState extends State<TicketsScreen>
                 const SizedBox(height: 8),
                 _buildMiniDetail(
                   Icons.location_on_rounded,
-                  event.venue,
+                  event.venue.isEmpty ? event.location : event.venue,
                   const Color(0xFF10B981),
                 ),
               ],
             ),
           ),
-
-          if (isConfirmed) ...[
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                children: [
-                  const Divider(height: 32, color: Color(0xFFF1F5F9)),
-                  const Text(
-                    "E-TICKET QR CODE",
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: Colors.grey,
-                      fontWeight: FontWeight.bold,
+          if (!isHistory) ...[
+            if (isConfirmed) ...[
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  children: [
+                    const Divider(height: 32, color: Color(0xFFF1F5F9)),
+                    const Text(
+                      "E-TICKET QR CODE",
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.grey,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  GestureDetector(
-                    onTap: () => _showFullQRCode(context, event),
-                    child: Container(
+                    const SizedBox(height: 16),
+                    GestureDetector(
+                      onTap: () => _showFullQRCode(
+                        context,
+                        event.title,
+                        transactionId,
+                        qrString,
+                      ),
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: const Color(0xFFE2E8F0)),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Hero(
+                          tag: 'qr-$transactionId',
+                          child: qrString.isEmpty
+                              ? const Icon(
+                                  Icons.qr_code_2_rounded,
+                                  size: 120,
+                                  color: Colors.grey,
+                                )
+                              : QrImageView(
+                                  data: qrString,
+                                  version: QrVersions.auto,
+                                  size: 120.0,
+                                  gapless: false,
+                                ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      "Klik QR Code untuk memperbesar",
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Color(0xFF4F46E5),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    ElevatedButton.icon(
+                      onPressed: () => _showDownloadDialog(context),
+                      icon: const Icon(
+                        Icons.file_download_outlined,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                      label: const Text(
+                        "Unduh PDF & Aturan",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF4F46E5),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        minimumSize: const Size(double.infinity, 48),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ] else ...[
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  children: [
+                    const Divider(height: 32, color: Color(0xFFF1F5F9)),
+                    Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        border: Border.all(color: const Color(0xFFE2E8F0)),
-                        borderRadius: BorderRadius.circular(16),
+                        color: const Color(0xFFFEF3C7),
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Hero(
-                        tag: 'qr-${event.id}',
-                        child: const Icon(
-                          Icons.qr_code_2_rounded,
-                          size: 120,
-                          color: Color(0xFF0F172A),
+                      child: const Icon(
+                        Icons.account_balance_wallet_rounded,
+                        color: Color(0xFFD97706),
+                        size: 30,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      "Selesaikan pembayaran atau unggah bukti transfer\ndi web agar admin dapat memverifikasi QR Code.",
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF64748B),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text("Menghubungi panitia acara..."),
+                          ),
+                        );
+                      },
+                      icon: const Icon(
+                        Icons.chat_rounded,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                      label: const Text(
+                        "Hubungi Panitia (WA)",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF4F46E5),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        minimumSize: const Size(double.infinity, 48),
+                        elevation: 0,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextButton(
+                      onPressed: () =>
+                          _showCancelConfirmation(context, transactionId),
+                      child: const Text(
+                        "Batalkan Pesanan",
+                        style: TextStyle(
+                          color: Color(0xFFEF4444),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    "Klik QR Code untuk memperbesar",
-                    style: TextStyle(
-                      fontSize: 10,
-                      color: Color(0xFF4F46E5),
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  ElevatedButton.icon(
-                    onPressed: () => _showDownloadDialog(context),
-                    icon: const Icon(
-                      Icons.file_download_outlined,
-                      color: Colors.white,
-                      size: 18,
-                    ),
-                    label: const Text(
-                      "Unduh PDF & Aturan",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF4F46E5),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      minimumSize: const Size(double.infinity, 48),
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ] else ...[
-            // BAGIAN MENUNGGU PEMBAYARAN (PENDING)
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                children: [
-                  const Divider(height: 32, color: Color(0xFFF1F5F9)),
-
-                  // ICON DOMPET KECIL (Sesuai Mockup Web)
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFEF3C7),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(
-                      Icons.account_balance_wallet_rounded,
-                      color: Color(0xFFD97706),
-                      size: 30,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  const Text(
-                    "Selesaikan pembayaran untuk\nmendapatkan QR Code.",
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Color(0xFF64748B),
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-
-                  // TOMBOL LANJUT KE WA (WARNA UNGU INDIGO)
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      // Simulasi buka WhatsApp
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text("Membuka WhatsApp Admin..."),
-                        ),
-                      );
-                    },
-                    icon: const Icon(
-                      Icons.chat_rounded,
-                      color: Colors.white,
-                      size: 18,
-                    ),
-                    label: const Text(
-                      "Lanjut ke WA",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF4F46E5),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      minimumSize: const Size(double.infinity, 48),
-                      elevation: 0,
-                    ),
-                  ),
-
-                  const SizedBox(height: 12),
-
-                  // TOMBOL BATALKAN PESANAN (WARNA MERAH)
-                  TextButton(
-                    onPressed: () => _showCancelConfirmation(context, index),
-                    child: const Text(
-                      "Batalkan Pesanan",
-                      style: TextStyle(
-                        color: Color(0xFFEF4444),
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            ],
           ],
         ],
       ),
@@ -427,7 +615,7 @@ class _TicketsScreenState extends State<TicketsScreen>
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         content: const Text(
-          "1. Tunjukkan QR Code di pintu masuk.\n2. Datang 15 menit sebelum acara.\n3. Jangan bagikan E-Ticket ini.\n\nPDF sedang diproses...",
+          "1. Tunjukkan QR Code di pintu masuk.\n2. Datang 15 menit sebelum acara.\n3. Jangan bagikan E-Ticket ini.\n\nPDF Tiket berhasil diunduh ke folder internal.",
         ),
         actions: [
           TextButton(
@@ -439,8 +627,7 @@ class _TicketsScreenState extends State<TicketsScreen>
     );
   }
 
-  // FUNGSI POP-UP KONFIRMASI BATAL
-  void _showCancelConfirmation(BuildContext context, int index) {
+  void _showCancelConfirmation(BuildContext context, String transactionId) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -459,17 +646,8 @@ class _TicketsScreenState extends State<TicketsScreen>
           ),
           TextButton(
             onPressed: () {
-              // PROSES MENGHAPUS TIKET DARI LIST
-              setState(() {
-                mockEvents.removeAt(index);
-              });
               Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text("Pesanan berhasil dibatalkan"),
-                  backgroundColor: Colors.red,
-                ),
-              );
+              _cancelTicket(transactionId);
             },
             child: const Text(
               "Ya, Batalkan",
@@ -484,7 +662,12 @@ class _TicketsScreenState extends State<TicketsScreen>
     );
   }
 
-  void _showFullQRCode(BuildContext context, Event event) {
+  void _showFullQRCode(
+    BuildContext context,
+    String title,
+    String transactionId,
+    String qrString,
+  ) {
     showDialog(
       context: context,
       builder: (context) => Dialog(
@@ -495,7 +678,7 @@ class _TicketsScreenState extends State<TicketsScreen>
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                event.title,
+                title,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontWeight: FontWeight.w900,
@@ -511,17 +694,24 @@ class _TicketsScreenState extends State<TicketsScreen>
                   border: Border.all(color: const Color(0xFFE2E8F0)),
                 ),
                 child: Hero(
-                  tag: 'qr-${event.id}',
-                  child: const Icon(
-                    Icons.qr_code_2_rounded,
-                    size: 220,
-                    color: Color(0xFF0F172A),
-                  ),
+                  tag: 'qr-$transactionId',
+                  child: qrString.isEmpty
+                      ? const Icon(
+                          Icons.qr_code_2_rounded,
+                          size: 220,
+                          color: Colors.grey,
+                        )
+                      : QrImageView(
+                          data: qrString,
+                          version: QrVersions.auto,
+                          size: 220.0,
+                          gapless: false,
+                        ),
                 ),
               ),
               const SizedBox(height: 32),
               const Text(
-                "Tunjukkan QR Code ini ke petugas",
+                "Tunjukkan QR Code ini ke petugas meja registrasi",
                 style: TextStyle(color: Colors.grey, fontSize: 12),
               ),
               const SizedBox(height: 24),

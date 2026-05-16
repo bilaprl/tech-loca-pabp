@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mobile/services/notification_service.dart';
 
 class MenuVerifikasiAdmin extends StatefulWidget {
@@ -9,31 +10,143 @@ class MenuVerifikasiAdmin extends StatefulWidget {
 }
 
 class _MenuVerifikasiAdminState extends State<MenuVerifikasiAdmin> {
-  List<Map<String, dynamic>> pesertaList = [
-    {
-      "nama": "Muthia Anggraeni",
-      "event": "Workshop Flutter Basic",
-      "status": "Pending",
-      "tanggal": "14 Mei 2026",
-      "no_tiket": "TCK-029-2026",
-      "bukti":
-          "https://raw.githubusercontent.com/muthiaanggraeni/flutter-assets/main/bukti-transfer-bca-dummy.png",
-    },
-    {
-      "nama": "Budi Santoso",
-      "event": "UI/UX Design Masterclass",
-      "status": "Berhasil",
-      "tanggal": "12 Mei 2026",
-      "no_tiket": "TCK-112-2026",
-      "bukti":
-          "https://raw.githubusercontent.com/muthiaanggraeni/flutter-assets/main/bukti-transfer-bca-dummy.png",
-    },
-  ];
-
+  List<Map<String, dynamic>> pesertaList = [];
+  List<Map<String, dynamic>> eventsFilterList = [];
   String selectedCategory = "SEMUA ACARA";
+  bool isLoading = true;
 
-  void _showDetailVerifikasi(BuildContext context, int index) {
-    final peserta = pesertaList[index];
+  @override
+  void initState() {
+    super.initState();
+    _fetchTransactionsData();
+  }
+
+  // ==================== AMBIL DATA LIVE DARI SUPABASE ====================
+  Future<void> _fetchTransactionsData() async {
+    try {
+      final supabase = Supabase.instance.client;
+
+      // Ambil transaksi yang belum dicancel (pending & confirmed) beserta profil dan event-nya
+      final response = await supabase
+          .from('transactions')
+          .select('*, profiles(*), events(*)')
+          .neq('status', 'cancelled')
+          .order('created_at', ascending: false);
+
+      final List<Map<String, dynamic>> loadedPeserta = [];
+      final Map<String, int> pendingCounts = {};
+
+      for (var item in response as List) {
+        final profile = item['profiles'];
+        final event = item['events'];
+
+        if (profile != null && event != null) {
+          final String eventTitle = event['title'] ?? 'Event';
+          final String status = item['status'] ?? 'pending';
+
+          // Hitung jumlah pending per event untuk badging filter card
+          if (status.toLowerCase() == 'pending') {
+            pendingCounts[eventTitle] = (pendingCounts[eventTitle] ?? 0) + 1;
+          }
+
+          // 🌟 PERBAIKAN 1: Proteksi pemotongan string tanggal pelaksanaan event
+          final String rawDate = event['date']?.toString() ?? '';
+          final String parsedDate = rawDate.contains('T')
+              ? rawDate.split('T')[0]
+              : (rawDate.isNotEmpty ? rawDate : '-');
+
+          loadedPeserta.add({
+            'id': item['id']?.toString() ?? '', // Transaction ID murni
+            'nama': profile['full_name'] ?? 'Anonim',
+            'instansi': profile['institution'] ?? 'UNIVERSITAS SILIWANGI',
+            'email': profile['email'] ?? '',
+            'whatsapp': profile['whatsapp'] ?? '',
+            'asal_lokasi': profile['location'] ?? 'Tidak Mengisi Lokasi',
+            'event': eventTitle,
+            'venue': event['venue'] ?? 'Gedung Rektorat Lt. 2',
+            'status': status == 'confirmed' ? 'Berhasil' : 'Pending',
+            'tanggal': parsedDate,
+            'qr_string': item['qr_code_string'] ?? '',
+            'bukti': item['payment_proof_url'] ?? '',
+          });
+        }
+      }
+
+      // Racik daftar filter dinamis dari database
+      final List<Map<String, dynamic>> localFilters = [
+        {
+          "title": "SEMUA ACARA",
+          "icon": Icons.all_inclusive_rounded,
+          "subtitle": "",
+        },
+      ];
+
+      // Ambil list event unik yang ada di transaksi
+      final uniqueEvents = loadedPeserta
+          .map((p) => p['event'])
+          .toSet()
+          .toList();
+      for (var ev in uniqueEvents) {
+        int count = pendingCounts[ev] ?? 0;
+        localFilters.add({
+          "title": ev.toUpperCase(),
+          "icon": Icons.confirmation_number_rounded,
+          "subtitle": count > 0 ? "$count Pending" : "0 Pending",
+        });
+      }
+
+      if (mounted) {
+        setState(() {
+          pesertaList = loadedPeserta;
+          eventsFilterList = localFilters;
+          isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint("Error Fetch Verifikasi Admin: $e");
+      if (mounted) setState(() => isLoading = false);
+    }
+  }
+
+  // ==================== AKSI VERIFIKASI PEMBAYARAN ====================
+  Future<void> _verifyPayment(String transactionId, String userNama) async {
+    try {
+      await Supabase.instance.client
+          .from('transactions')
+          .update({'status': 'confirmed'})
+          .eq('id', transactionId);
+
+      // Trigger Push Notification Lokal di HP Peserta
+      await NotificationService.showNotification(
+        id: transactionId.hashCode,
+        title: "Pembayaran Berhasil! ✅",
+        body: "Tiket untuk $userNama telah diverifikasi oleh admin TechLoca.",
+        type: 'ticket',
+      );
+
+      _fetchTransactionsData(); // Memuat ulang data dari database
+    } catch (e) {
+      debugPrint("Error Verifying Payment: $e");
+    }
+  }
+
+  // ==================== LOGIKA PULL-TO-REFRESH ====================
+  Future<void> _handleRefresh() async {
+    await _fetchTransactionsData();
+  }
+
+  // --- DETAIL VERIFIKASI (BOTTOM SHEET) ---
+  void _showDetailVerifikasi(
+    BuildContext context,
+    Map<String, dynamic> peserta,
+  ) {
+    bool isPending = peserta['status'] == "Pending";
+
+    // 🌟 PERBAIKAN 2: Amankan pemotongan string Order ID UUID untuk sub-header sheet
+    final String certIdRaw = peserta['id']?.toString() ?? '';
+    final String shortCertId = certIdRaw.length >= 8
+        ? certIdRaw.substring(0, 8).toUpperCase()
+        : 'UNKNOWN';
 
     showModalBottomSheet(
       context: context,
@@ -44,7 +157,12 @@ class _MenuVerifikasiAdminState extends State<MenuVerifikasiAdmin> {
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
         ),
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+        padding: const EdgeInsets.only(
+          bottom: 24,
+          left: 24,
+          right: 24,
+          top: 20,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -64,7 +182,7 @@ class _MenuVerifikasiAdminState extends State<MenuVerifikasiAdmin> {
                       ),
                     ),
                     Text(
-                      "Order ID: #${peserta['no_tiket'].split('-')[1]}",
+                      "Order ID: #$shortCertId",
                       style: const TextStyle(
                         color: Color(0xFF94A3B8),
                         fontSize: 13,
@@ -100,44 +218,31 @@ class _MenuVerifikasiAdminState extends State<MenuVerifikasiAdmin> {
                           width: 60,
                           height: 60,
                           fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) {
-                            return Container(
-                              width: 60,
-                              height: 60,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF1F5F9),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: const Icon(
-                                Icons.person_rounded,
-                                color: Color(0xFF94A3B8),
-                                size: 30,
-                              ),
-                            );
-                          },
                         ),
                       ),
                       const SizedBox(width: 16),
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            peserta['nama'],
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w900,
-                              fontSize: 18,
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              peserta['nama'],
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w900,
+                                fontSize: 18,
+                              ),
                             ),
-                          ),
-                          const Text(
-                            "UNIVERSITAS SILIWANGI",
-                            style: TextStyle(
-                              color: Color(0xFF4F46E5),
-                              fontWeight: FontWeight.bold,
-                              fontSize: 11,
-                              letterSpacing: 1,
+                            Text(
+                              peserta['instansi'].toString().toUpperCase(),
+                              style: const TextStyle(
+                                color: Color(0xFF4F46E5),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 11,
+                                letterSpacing: 1,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -146,10 +251,15 @@ class _MenuVerifikasiAdminState extends State<MenuVerifikasiAdmin> {
                   const SizedBox(height: 12),
                   _buildIconInfo(
                     Icons.alternate_email_rounded,
-                    "${peserta['nama'].toLowerCase().replaceAll(' ', '.')}@student.unsil.ac.id",
+                    peserta['email'],
                   ),
                   const SizedBox(height: 12),
-                  _buildIconInfo(Icons.smartphone_rounded, "081234567890"),
+                  _buildIconInfo(Icons.smartphone_rounded, peserta['whatsapp']),
+                  const SizedBox(height: 12),
+                  _buildIconInfo(
+                    Icons.location_on_rounded,
+                    "Asal: ${peserta['asal_lokasi']}",
+                  ),
                 ],
               ),
             ),
@@ -185,35 +295,47 @@ class _MenuVerifikasiAdminState extends State<MenuVerifikasiAdmin> {
                     ),
                   ),
                   const SizedBox(width: 16),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        peserta['event'],
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w900,
-                          fontSize: 15,
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          peserta['event'],
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w900,
+                            fontSize: 15,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        "${peserta['tanggal'].toUpperCase()} • GEDUNG REKTORAT LT. 2",
-                        style: const TextStyle(
-                          color: Color(0xFF94A3B8),
-                          fontWeight: FontWeight.bold,
-                          fontSize: 10,
+                        const SizedBox(height: 4),
+                        Text(
+                          "${peserta['tanggal'].toUpperCase()} • ${peserta['venue'].toString().toUpperCase()}",
+                          style: const TextStyle(
+                            color: Color(0xFF94A3B8),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 10,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 24),
+            // 🌟 PERBAIKAN 3: Amankan pemotongan string rincian manifes Order ID panjang murni
             _buildDetailRow(
-              "No. Tiket",
-              peserta['no_tiket'],
-            ), // Memanggil fungsi agar tidak unused
+              "Order ID (UUID)",
+              certIdRaw.length >= 18
+                  ? "${certIdRaw.substring(0, 18)}..."
+                  : certIdRaw,
+            ),
+            const SizedBox(height: 8),
+            _buildDetailRow(
+              "QR Code Payload",
+              peserta['qr_string'].isEmpty
+                  ? "Belum Di-generate"
+                  : peserta['qr_string'],
+            ),
             const SizedBox(height: 24),
             const Text(
               "Pastikan bukti transfer di WhatsApp sudah sesuai sebelum konfirmasi.",
@@ -226,26 +348,28 @@ class _MenuVerifikasiAdminState extends State<MenuVerifikasiAdmin> {
             const SizedBox(height: 24),
             Row(
               children: [
-                Expanded(
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFF8FAFC),
-                      foregroundColor: const Color(0xFF94A3B8),
-                      elevation: 0,
-                      padding: const EdgeInsets.symmetric(vertical: 20),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                    ),
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text(
-                      "TUTUP",
-                      style: TextStyle(fontWeight: FontWeight.w900),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                if (peserta['status'] == "Pending")
+                Navigator.canPop(context)
+                    ? Expanded(
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFF8FAFC),
+                            foregroundColor: const Color(0xFF94A3B8),
+                            elevation: 0,
+                            padding: const EdgeInsets.symmetric(vertical: 20),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                          ),
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text(
+                            "TUTUP",
+                            style: TextStyle(fontWeight: FontWeight.w900),
+                          ),
+                        ),
+                      )
+                    : const SizedBox(),
+                if (isPending) ...[
+                  const SizedBox(width: 16),
                   Expanded(
                     child: ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
@@ -258,17 +382,8 @@ class _MenuVerifikasiAdminState extends State<MenuVerifikasiAdmin> {
                         ),
                       ),
                       onPressed: () {
-                        setState(() => peserta['status'] = "Berhasil");
                         Navigator.pop(context);
-
-                        // TRIGGER NOTIFIKASI LOKAL
-                        NotificationService.showNotification(
-                          id: 1,
-                          title: "Pembayaran Berhasil! ✅",
-                          body:
-                              "Tiket untuk ${peserta['nama']} telah diverifikasi.",
-                        );
-
+                        _verifyPayment(peserta['id'], peserta['nama']);
                         _showTopSnackBar(
                           context,
                           "✅ Pembayaran Berhasil Dikonfirmasi!",
@@ -281,6 +396,7 @@ class _MenuVerifikasiAdminState extends State<MenuVerifikasiAdmin> {
                       ),
                     ),
                   ),
+                ],
               ],
             ),
             const SizedBox(height: 12),
@@ -295,12 +411,16 @@ class _MenuVerifikasiAdminState extends State<MenuVerifikasiAdmin> {
       children: [
         Icon(icon, size: 18, color: const Color(0xFF475569)),
         const SizedBox(width: 12),
-        Text(
-          text,
-          style: const TextStyle(
-            color: Color(0xFF475569),
-            fontWeight: FontWeight.bold,
-            fontSize: 13,
+        Expanded(
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Color(0xFF475569),
+              fontWeight: FontWeight.bold,
+              fontSize: 13,
+            ),
           ),
         ),
       ],
@@ -354,6 +474,7 @@ class _MenuVerifikasiAdminState extends State<MenuVerifikasiAdmin> {
         : pesertaList
               .where((p) => p['event'].toUpperCase() == selectedCategory)
               .toList();
+
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
@@ -365,126 +486,162 @@ class _MenuVerifikasiAdminState extends State<MenuVerifikasiAdmin> {
         foregroundColor: const Color(0xFF0F172A),
         elevation: 0,
       ),
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(20, 20, 20, 12),
-            child: Row(
-              children: [
-                Icon(Icons.circle, size: 8, color: Color(0xFF6366F1)),
-                SizedBox(width: 8),
-                Text(
-                  "PILIH ACARA UNTUK VERIFIKASI",
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w900,
-                    color: Color(0xFF0F172A),
-                    letterSpacing: 1,
+      body: RefreshIndicator(
+        onRefresh: _handleRefresh,
+        color: const Color(0xFF4F46E5),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 20, 20, 12),
+              child: Row(
+                children: [
+                  Icon(Icons.circle, size: 8, color: Color(0xFF6366F1)),
+                  SizedBox(width: 8),
+                  Text(
+                    "PILIH ACARA UNTUK VERIFIKASI",
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                      color: Color(0xFF0F172A),
+                      letterSpacing: 1,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                _buildFilterCard(
-                  "SEMUA ACARA",
-                  Icons.all_inclusive_rounded,
-                  "",
-                ),
-                _buildFilterCard(
-                  "WORKSHOP FLUTTER BASIC",
-                  Icons.confirmation_number_rounded,
-                  "1 Pending",
-                ),
-                _buildFilterCard(
-                  "UI/UX DESIGN MASTERCLASS",
-                  Icons.confirmation_number_rounded,
-                  "1 Pending",
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-          Expanded(
-            child: ListView.builder(
+
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              itemCount: filteredList.length,
-              itemBuilder: (context, index) {
-                final p = filteredList[index];
-                bool isSuccess = p['status'] == "Berhasil";
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.03),
-                        blurRadius: 10,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: ListTile(
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 8,
-                    ),
-                    leading: CircleAvatar(
-                      backgroundColor: const Color(0xFFF1F5F9),
-                      backgroundImage: NetworkImage(
-                        "https://ui-avatars.com/api/?name=${p['nama']}&background=random",
-                      ),
-                    ),
-                    title: Text(
-                      p['nama'],
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
-                      ),
-                    ),
-                    subtitle: Text(
-                      p['event'],
-                      style: const TextStyle(
-                        color: Color(0xFF94A3B8),
-                        fontSize: 12,
-                      ),
-                    ),
-                    trailing: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isSuccess
-                            ? const Color(0xFFDCFCE7)
-                            : const Color(0xFFFEF9C3),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        p['status'].toUpperCase(),
-                        style: TextStyle(
-                          color: isSuccess
-                              ? const Color(0xFF166534)
-                              : const Color(0xFF854D0E),
-                          fontWeight: FontWeight.w900,
-                          fontSize: 10,
+              child: Row(
+                children: eventsFilterList.isEmpty && isLoading
+                    ? [
+                        const Padding(
+                          padding: EdgeInsets.all(8.0),
+                          child: CircularProgressIndicator(),
                         ),
-                      ),
-                    ),
-                    onTap: () =>
-                        _showDetailVerifikasi(context, pesertaList.indexOf(p)),
-                  ),
-                );
-              },
+                      ]
+                    : eventsFilterList
+                          .map(
+                            (f) => _buildFilterCard(
+                              f['title'],
+                              f['icon'],
+                              f['subtitle'],
+                            ),
+                          )
+                          .toList(),
+              ),
             ),
-          ),
-        ],
+            const SizedBox(height: 24),
+
+            Expanded(
+              child: isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : filteredList.isEmpty
+                  ? ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: [
+                        SizedBox(
+                          height: MediaQuery.of(context).size.height * 0.2,
+                        ),
+                        const Center(
+                          child: Text(
+                            "Tidak ada antrean pendaftaran.",
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                        ),
+                      ],
+                    )
+                  : ListView.builder(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      itemCount: filteredList.length,
+                      itemBuilder: (context, index) {
+                        final p = filteredList[index];
+                        bool isSuccess = p['status'] == "Berhasil";
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.03),
+                                blurRadius: 10,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 20,
+                              vertical: 8,
+                            ),
+                            leading: CircleAvatar(
+                              backgroundColor: const Color(0xFFF1F5F9),
+                              backgroundImage: NetworkImage(
+                                "https://ui-avatars.com/api/?name=${p['nama']}&background=random",
+                              ),
+                            ),
+                            title: Text(
+                              p['nama'],
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                              ),
+                            ),
+                            subtitle: Text(
+                              p['event'],
+                              style: const TextStyle(
+                                color: Color(0xFF94A3B8),
+                                fontSize: 12,
+                              ),
+                            ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: isSuccess
+                                        ? const Color(0xFFDCFCE7)
+                                        : const Color(0xFFFEF9C3),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    p['status'].toUpperCase(),
+                                    style: TextStyle(
+                                      color: isSuccess
+                                          ? const Color(0xFF166534)
+                                          : const Color(0xFF854D0E),
+                                      fontWeight: FontWeight.w900,
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.info_outline_rounded,
+                                    color: Color(0xFF6366F1),
+                                  ),
+                                  onPressed: () =>
+                                      _showDetailVerifikasi(context, p),
+                                ),
+                              ],
+                            ),
+                            onTap: () => _showDetailVerifikasi(context, p),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }

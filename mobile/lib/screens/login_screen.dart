@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../main.dart';
 import '../admin/admin_dashboard_screen.dart'; // Pastikan import ini ada
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -14,29 +15,91 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _passwordController = TextEditingController();
   bool _isLoading = false;
 
-  void _handleLogin() {
+  Future<void> _handleLogin() async {
+    // Validasi input kosong
+    if (_emailController.text.trim().isEmpty ||
+        _passwordController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Email dan password tidak boleh kosong."),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
     setState(() => _isLoading = true);
 
-    // Simulasi loading API (1.5 detik)
-    Future.delayed(const Duration(milliseconds: 1500), () {
-      if (!mounted) return;
-      setState(() => _isLoading = false);
+    try {
+      // 1. Autentikasi menggunakan Supabase Auth
+      final AuthResponse res = await Supabase.instance.client.auth
+          .signInWithPassword(
+            email: _emailController.text.trim(),
+            password: _passwordController.text.trim(),
+          );
 
-      // LOGIKA PEMISAH ROLE
-      if (_emailController.text == 'admin@techloca.com') {
-        // JIKA ADMIN -> Ke Dashboard Admin
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => AdminDashboardScreen()),
-        );
-      } else {
-        // JIKA PESERTA -> Ke MainNavigation
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => MainNavigation()),
-        );
+      final user = res.user;
+
+      if (user != null) {
+        // 2. Ambil role dari tabel profiles berdasarkan user ID
+        final profileData = await Supabase.instance.client
+            .from('profiles')
+            .select('role')
+            .eq('id', user.id)
+            .maybeSingle();
+
+        // 🌟 PERBAIKAN: Gunakan pemetaan string aman untuk mengantisipasi jika nilai kolom di db bernilai null
+        final String userRole = (profileData?['role']?.toString() ?? 'user')
+            .trim()
+            .toLowerCase();
+
+        if (!mounted) return;
+
+        // 3. Arahkan pengguna sesuai role (Mendukung validasi huruf besar/kecil dari db)
+        if (userRole == 'admin' || userRole == 'eo') {
+          // JIKA ADMIN -> Ke Dashboard Admin
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => const AdminDashboardScreen(),
+            ),
+          );
+        } else {
+          // JIKA PESERTA -> Ke MainNavigation
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => MainNavigation()),
+          );
+        }
       }
-    });
+    } on AuthException catch (e) {
+      // Menangkap error spesifik dari Supabase (misal: password salah)
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Login gagal: ${e.message}"),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } catch (e) {
+      // Menangkap error umum (misal: masalah koneksi)
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Terjadi kesalahan. Pastikan koneksi internet stabil."),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
   }
 
   @override

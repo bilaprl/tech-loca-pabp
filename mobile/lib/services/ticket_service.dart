@@ -8,15 +8,45 @@ class TicketService {
     await Hive.openBox(_boxName);
   }
 
-  // Fungsi menyimpan tiket (saat pertama kali daftar/beli)
+  // FUNGSI MENYIMPAN TIKET AKTIF DARI BACKEND KE CACHE LOKAL HIVE
   static Future<void> saveTicket(Map<String, dynamic> ticketData) async {
     var box = Hive.box(_boxName);
     await box.put('my_ticket', ticketData);
   }
 
-  // Fungsi mengambil tiket (meskipun offline)
-  static Map<dynamic, dynamic>? getSavedTicket() {
+  // FUNGSI MENGAMBIL TIKET YANG SUDAH TERCACHED SAAT OFFLINE
+  static Map<String, dynamic>? getSavedTicket() {
     var box = Hive.box(_boxName);
-    return box.get('my_ticket');
+    final rawData = box.get('my_ticket');
+
+    if (rawData == null) return null;
+
+    // 🌟 PERBAIKAN UTAMA: Menggunakan helper rekursif untuk mengonversi seluruh nested map internal Hive
+    // agar kebal dari TypeError saat parsing objek Event.fromJson secara offline.
+    return _deepConvertMap(rawData);
+  }
+
+  // Helper Rekursif untuk membersihkan tipe data _Map bawaan lokal Hive
+  static Map<String, dynamic>? _deepConvertMap(dynamic map) {
+    if (map == null) return null;
+
+    final Map<String, dynamic> converted = {};
+
+    map.forEach((key, value) {
+      if (value is Map) {
+        converted[key.toString()] = _deepConvertMap(value);
+      } else if (value is List) {
+        converted[key.toString()] = value.map((item) {
+          if (item is Map) {
+            return _deepConvertMap(item);
+          }
+          return item;
+        }).toList();
+      } else {
+        converted[key.toString()] = value;
+      }
+    });
+
+    return converted;
   }
 }

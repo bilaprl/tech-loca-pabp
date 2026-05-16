@@ -1,7 +1,22 @@
 import 'package:flutter/material.dart';
 
-class AboutScreen extends StatelessWidget {
+class AboutScreen extends StatefulWidget {
   const AboutScreen({super.key});
+
+  @override
+  State<AboutScreen> createState() => _AboutScreenState();
+}
+
+class _AboutScreenState extends State<AboutScreen> {
+  // FUNGSI SIMULASI PULL-TO-REFRESH UNTUK HALAMAN STATIS
+  Future<void> _handleRefresh() async {
+    await Future.delayed(const Duration(milliseconds: 800));
+    if (mounted) {
+      setState(() {
+        // Refresh state lokal untuk membersihkan cache rendering halaman
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -22,56 +37,63 @@ class AboutScreen extends StatelessWidget {
           ),
         ),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            // LOGO & VERSI
-            const Icon(Icons.code, size: 80, color: Color(0xFF4F46E5)),
-            const SizedBox(height: 16),
-            const Text(
-              "TechLoca",
-              style: TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.w900,
-                color: Color(0xFF0F172A),
+      // IMPLEMENTASI AKTIF FITUR PULL TO REFRESH
+      body: RefreshIndicator(
+        onRefresh: _handleRefresh,
+        color: const Color(0xFF4F46E5),
+        child: SingleChildScrollView(
+          physics:
+              const AlwaysScrollableScrollPhysics(), // Memaksa halaman bisa ditarik ke bawah
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // LOGO & VERSI
+              const Icon(Icons.code, size: 80, color: Color(0xFF4F46E5)),
+              const SizedBox(height: 16),
+              const Text(
+                "TechLoca",
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFF0F172A),
+                ),
               ),
-            ),
-            const Text("Versi 1.0.0", style: TextStyle(color: Colors.grey)),
-            const SizedBox(height: 32),
+              const Text("Versi 1.0.0", style: TextStyle(color: Colors.grey)),
+              const SizedBox(height: 32),
 
-            // DESKRIPSI (Sesuai Web)
-            const Text(
-              "TechLoca adalah platform manajemen event IT yang dirancang khusus untuk memfasilitasi mahasiswa dan komunitas teknologi dalam menemukan, mendaftar, dan mengelola sertifikat acara secara digital.",
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 15,
-                height: 1.6,
-                color: Color(0xFF475569),
+              // DESKRIPSI (Sesuai Web)
+              const Text(
+                "TechLoca adalah platform manajemen event IT yang dirancang khusus untuk memfasilitasi mahasiswa dan komunitas teknologi dalam menemukan, mendaftar, dan mengelola sertifikat acara secara digital.",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 15,
+                  height: 1.6,
+                  color: Color(0xFF475569),
+                ),
               ),
-            ),
-            const SizedBox(height: 32),
+              const SizedBox(height: 32),
 
-            // VISI & MISI (Sesuai Web)
-            _buildInfoCard(
-              "Visi Kami",
-              "Menjadi pusat ekosistem kolaborasi IT terbesar yang menghubungkan talenta digital dengan kesempatan belajar yang inklusif.",
-              Icons.auto_awesome_outlined,
-            ),
-            const SizedBox(height: 16),
-            _buildInfoCard(
-              "Misi Kami",
-              "Menyediakan akses pendaftaran event yang mudah, sistem absensi QR-Code yang cepat, dan distribusi sertifikat digital yang aman.",
-              Icons.rocket_launch_outlined,
-            ),
+              // VISI & MISI (Sesuai Web)
+              _buildInfoCard(
+                "Visi Kami",
+                "Menjadi pusat ekosistem kolaborasi IT terbesar yang menghubungkan talenta digital dengan kesempatan belajar yang inklusif.",
+                Icons.auto_awesome_outlined,
+              ),
+              const SizedBox(height: 16),
+              _buildInfoCard(
+                "Misi Kami",
+                "Menyediakan akses pendaftaran event yang mudah, sistem absensi QR-Code yang cepat, dan distribusi sertifikat digital yang aman.",
+                Icons.rocket_launch_outlined,
+              ),
 
-            const SizedBox(height: 40),
-            const Text(
-              "© 2026 TechLoca Team. All rights reserved.",
-              style: TextStyle(color: Colors.grey, fontSize: 12),
-            ),
-          ],
+              const SizedBox(height: 40),
+              const Text(
+                "© 2026 TechLoca Team. All rights reserved.",
+                style: TextStyle(color: Colors.grey, fontSize: 12),
+              ),
+            ],
+          ),
         ),
       ),
     );
