@@ -293,17 +293,37 @@ class _WishlistScreenState extends State<WishlistScreen>
                   borderRadius: const BorderRadius.vertical(
                     top: Radius.circular(24),
                   ),
-                  child: Image.network(
-                    event.imageUrl,
-                    height: 160,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
-                    errorBuilder: (c, e, s) => Container(
-                      height: 160,
-                      color: Colors.grey[200],
-                      child: const Icon(Icons.broken_image, color: Colors.grey),
-                    ),
-                  ),
+                  child: event.isBase64Image && event.base64Bytes != null
+                      // 🌟 JIKA GAMBAR DARI WEB (BASE64)
+                      ? Image.memory(
+                          event.base64Bytes!,
+                          height: 160,
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                          errorBuilder: (c, e, s) => Container(
+                            height: 160,
+                            color: Colors.grey[200],
+                            child: const Icon(
+                              Icons.broken_image,
+                              color: Colors.grey,
+                            ),
+                          ),
+                        )
+                      // 🌟 JIKA GAMBAR DARI MOBILE (URL SUPABASE BIASA)
+                      : Image.network(
+                          event.imageUrl,
+                          height: 160,
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                          errorBuilder: (c, e, s) => Container(
+                            height: 160,
+                            color: Colors.grey[200],
+                            child: const Icon(
+                              Icons.broken_image,
+                              color: Colors.grey,
+                            ),
+                          ),
+                        ),
                 ),
                 Positioned(
                   top: 15,

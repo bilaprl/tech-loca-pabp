@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import '../services/notification_service.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -18,7 +19,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     _syncNotificationsWithBackend();
   }
 
-  // SINKRONISASI DATA SUPABASE KE HIVE BOX NOTIFIKASI
+  // SINKRONISASI DATA SUPABASE KE HIVE BOX & MUNCULKAN NOTIFIKASI LOKAL
   Future<void> _syncNotificationsWithBackend() async {
     final user = Supabase.instance.client.auth.currentUser;
     if (user == null) return;
@@ -40,67 +41,131 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           .select('*, transactions!inner(user_id, events(title))')
           .eq('transactions.user_id', user.id);
 
-      // Bersihkan box lokal terlebih dahulu agar sinkron dengan yang terbaru
-      await box.clear();
+      final List<Map<dynamic, dynamic>> existingNotifs = box.values
+          .cast<Map<dynamic, dynamic>>()
+          .toList();
 
-      // Masukkan Notifikasi Berbasis Transaksi Tiket
+      bool hasNew = false;
+
+      // 🌟 PROSES TRANSAKSI (Menangkap semua status + Check in)
       for (var trans in transResponse as List) {
-        final eventTitle = trans['events']?['title'] ?? 'Event';
-        final status = trans['status'] ?? 'pending';
+        final status = trans['status'];
+        final eventTitle = trans['events'] != null
+            ? trans['events']['title']
+            : 'Event';
+        final transDate =
+            trans['updated_at'] != null || trans['created_at'] != null
+            ? DateTime.parse(trans['updated_at'] ?? trans['created_at'])
+            : DateTime.now();
 
-        String title = "Pemesanan Tiket";
-        String desc =
-            "Tiket untuk event '$eventTitle' sedang menunggu verifikasi pembayaran.";
-        String type = "event";
+        String title = '';
+        String desc = '';
+        bool isValidStatus = false;
 
-        if (status == 'confirmed') {
-          title = "Tiket Terkonfirmasi!";
+        // Cek Status Transaksi
+        if (status == 'success' || status == 'confirmed') {
+          title = 'Tiket Dikonfirmasi! 🎉';
+          desc = 'Pembayaran tiketmu untuk $eventTitle berhasil diverifikasi.';
+          isValidStatus = true;
+        } else if (status == 'waiting') {
+          title = 'Menunggu Verifikasi ⏳';
           desc =
-              "Selamat! Pembayaran event '$eventTitle' diverifikasi. QR Code e-ticket kamu sudah aktif.";
-          type = "ticket";
-        } else if (status == 'cancelled') {
-          title = "Pesanan Dibatalkan";
-          desc = "Pesanan tiket untuk event '$eventTitle' telah dibatalkan.";
-          type = "default";
+              'Pembayaran tiket $eventTitle sedang kami proses. Mohon tunggu.';
+          isValidStatus = true;
+        } else if (status == 'failed') {
+          title = 'Transaksi Gagal ❌';
+          desc = 'Maaf, pembayaran tiket $eventTitle gagal atau ditolak admin.';
+          isValidStatus = true;
         }
 
-        // 🌟 PERBAIKAN 1: Proteksi pemotongan string tanggal created_at transaksi
-        final String rawTransTime = trans['created_at']?.toString() ?? '';
-        final String parsedTransTime = rawTransTime.contains('T')
-            ? rawTransTime.split('T')[0]
-            : (rawTransTime.isNotEmpty ? rawTransTime : 'Baru saja');
+        // Simpan & Munculkan Notif Status Transaksi
+        if (isValidStatus) {
+          final notifId = 'trans-${trans['id']}-$status';
+          if (!existingNotifs.any((n) => n['id'] == notifId)) {
+            final newNotif = {
+              'id': notifId,
+              'type': 'ticket',
+              'title': title,
+              'desc': desc,
+              'time':
+                  '${transDate.day}-${transDate.month}-${transDate.year} ${transDate.hour}:${transDate.minute}',
+              'timestamp': transDate.toIso8601String(),
+              'isRead': false,
+            };
+            await box.add(newNotif);
+            hasNew = true;
+            // PANGGIL POP-UP HP
+            NotificationService.showNotification(title: title, body: desc);
+          }
+        }
 
-        await box.add({
-          'id': trans['id'].toString(),
-          'title': title,
-          'desc': desc,
-          'type': type,
-          'time': parsedTransTime,
-        });
+        // Cek Status Check-In (Jika petugas sudah scan QR di lokasi)
+        if (trans['is_checked_in'] == true) {
+          final checkinId = 'checkin-${trans['id']}';
+          if (!existingNotifs.any((n) => n['id'] == checkinId)) {
+            final newNotif = {
+              'id': checkinId,
+              'type': 'ticket',
+              'title': 'Berhasil Check-In! ✅',
+              'desc': 'Selamat datang di $eventTitle! Selamat mengikuti acara.',
+              'time':
+                  '${transDate.day}-${transDate.month}-${transDate.year} ${transDate.hour}:${transDate.minute}',
+              'timestamp': transDate.toIso8601String(),
+              'isRead': false,
+            };
+            await box.add(newNotif);
+            hasNew = true;
+            // PANGGIL POP-UP HP
+            NotificationService.showNotification(
+              title: newNotif['title'] as String,
+              body: newNotif['desc'] as String,
+            );
+          }
+        }
       }
 
-      // Masukkan Notifikasi Berbasis Penerbitan Sertifikat
+      // 🌟 PROSES SERTIFIKAT
       for (var cert in certResponse as List) {
-        final eventTitle = cert['transactions']?['events']?['title'] ?? 'Event';
+        final certId = cert['id'];
+        final transData = cert['transactions'];
+        final eventTitle = transData != null && transData['events'] != null
+            ? transData['events']['title']
+            : 'Event';
+        final certDate = cert['created_at'] != null
+            ? DateTime.parse(cert['created_at'])
+            : DateTime.now();
 
-        // 🌟 PERBAIKAN 2: Proteksi pemotongan string tanggal created_at sertifikat
-        final String rawCertTime = cert['created_at']?.toString() ?? '';
-        final String parsedCertTime = rawCertTime.contains('T')
-            ? rawCertTime.split('T')[0]
-            : (rawCertTime.isNotEmpty ? rawCertTime : 'Baru saja');
+        final notifId = 'cert-$certId';
 
-        await box.add({
-          'id': cert['id'].toString(),
-          'title': "Sertifikat Baru Terbit!",
-          'desc':
-              "Selamat! Sertifikat digital kamu untuk event '$eventTitle' telah diterbitkan. Silakan unduh.",
-          'type': "cert",
-          'time': parsedCertTime,
-        });
+        if (!existingNotifs.any((n) => n['id'] == notifId)) {
+          final newNotif = {
+            'id': notifId,
+            'type': 'certificate',
+            'title': 'Sertifikat Tersedia! 🎓',
+            'desc':
+                'Sertifikat untuk event $eventTitle sudah bisa diunduh sekarang.',
+            'time':
+                '${certDate.day}-${certDate.month}-${certDate.year} ${certDate.hour}:${certDate.minute}',
+            'timestamp': certDate.toIso8601String(),
+            'isRead': false,
+          };
+          await box.add(newNotif);
+          hasNew = true;
+
+          // PANGGIL POP-UP HP
+          NotificationService.showNotification(
+            title: newNotif['title'] as String,
+            body: newNotif['desc'] as String,
+          );
+        }
+      }
+
+      if (mounted) {
+        setState(() => _isRefreshing = false);
+        // Kalau tidak ada yang baru, tidak usah tampilkan snackbar kosong
       }
     } catch (e) {
-      debugPrint("Error Sync Notifications: $e");
-    } finally {
+      debugPrint("Error sync notifications: $e");
       if (mounted) setState(() => _isRefreshing = false);
     }
   }

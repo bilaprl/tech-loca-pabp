@@ -66,6 +66,8 @@ class _MenuEventAdminState extends State<MenuEventAdmin> {
       final String numericPriceStr = price.replaceAll(RegExp(r'[^0-9]'), '');
       final String numericQuotaStr = quota.replaceAll(RegExp(r'[^0-9]'), '');
 
+      String sanitize(String input) => input.replaceAll('\u0000', '').trim();
+
       final eventData = {
         'title': title,
         'eo': eo,
@@ -177,7 +179,7 @@ class _MenuEventAdminState extends State<MenuEventAdmin> {
           top: 20,
         ),
         child: StatefulBuilder(
-          builder: (context, setModalState) => SingleChildScrollView(
+          builder: (modalContext, setModalState) => SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -560,20 +562,40 @@ class _MenuEventAdminState extends State<MenuEventAdmin> {
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: ListTile(
+        // 🌟 PERBAIKAN UTAMA: Mendukung render gambar Base64 dari Web & URL dari Mobile
         leading: ClipRRect(
           borderRadius: BorderRadius.circular(8),
-          child: Image.network(
-            event.imageUrl,
-            width: 50,
-            height: 50,
-            fit: BoxFit.cover,
-            errorBuilder: (context, error, stackTrace) => Container(
-              width: 50,
-              height: 50,
-              color: Colors.grey.shade200,
-              child: const Icon(Icons.image_not_supported, color: Colors.grey),
-            ),
-          ),
+          child: event.isBase64Image && event.base64Bytes != null
+              ? Image.memory(
+                  event.base64Bytes!,
+                  width: 50,
+                  height: 50,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) => Container(
+                    width: 50,
+                    height: 50,
+                    color: Colors.grey.shade200,
+                    child: const Icon(
+                      Icons.image_not_supported,
+                      color: Colors.grey,
+                    ),
+                  ),
+                )
+              : Image.network(
+                  event.imageUrl,
+                  width: 50,
+                  height: 50,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) => Container(
+                    width: 50,
+                    height: 50,
+                    color: Colors.grey.shade200,
+                    child: const Icon(
+                      Icons.image_not_supported,
+                      color: Colors.grey,
+                    ),
+                  ),
+                ),
         ),
         title: Text(
           event.title,

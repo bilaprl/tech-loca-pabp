@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../event_model.dart';
+import 'dart:convert';
+import 'dart:typed_data';
 
 class CertificatesScreen extends StatefulWidget {
   const CertificatesScreen({super.key});
@@ -160,7 +162,8 @@ class _CertificatesScreenState extends State<CertificatesScreen> {
                       organizer: event.eo,
                       date: cert['date'],
                       id: "TL-CERT-${cert['id']}",
-                      img: event.imageUrl,
+                      img: event
+                          .imageUrl, // 🌟 PERBAIKAN: Kembalikan menjadi 'img'
                       fileUrl: cert['file_url'],
                     ),
                   );
@@ -179,6 +182,18 @@ class _CertificatesScreenState extends State<CertificatesScreen> {
     required String img,
     required String fileUrl,
   }) {
+    // 🌟 PERBAIKAN: Proteksi Null agar aplikasi tidak crash kalau gambarnya kosong
+    final String safeImg = img.trim().isEmpty ? '' : img;
+    bool isBase64 = safeImg.startsWith('data:image');
+    Uint8List? bytes;
+
+    if (isBase64) {
+      try {
+        bytes = base64Decode(safeImg.split(',').last);
+      } catch (e) {
+        isBase64 = false;
+      }
+    }
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -200,22 +215,45 @@ class _CertificatesScreenState extends State<CertificatesScreen> {
           Stack(
             children: [
               ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: Image.network(
-                  img,
-                  width: 100,
-                  height: 160,
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) => Container(
-                    width: 100,
-                    height: 160,
-                    color: Colors.grey.shade200,
-                    child: const Icon(
-                      Icons.image_not_supported,
-                      color: Colors.grey,
-                    ),
-                  ),
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(20),
+                  bottomLeft: Radius.circular(20),
                 ),
+                child: isBase64 && bytes != null
+                    // 🌟 JIKA GAMBAR DARI WEB (BASE64)
+                    ? Image.memory(
+                        bytes,
+                        width: 100,
+                        height:
+                            120, // 🌟 PERBAIKAN: Beri tinggi yang pasti (misal 120) agar layout tidak crash
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) => Container(
+                          width: 100,
+                          height: 120,
+                          color: Colors.grey[200],
+                          child: const Icon(
+                            Icons.broken_image,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      )
+                    // 🌟 JIKA GAMBAR DARI MOBILE (URL)
+                    : Image.network(
+                        safeImg, // Gunakan safeImg yang sudah diproteksi dari null
+                        width: 100,
+                        height:
+                            120, // 🌟 PERBAIKAN: Beri tinggi yang pasti (misal 120)
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) => Container(
+                          width: 100,
+                          height: 120,
+                          color: Colors.grey[200],
+                          child: const Icon(
+                            Icons.broken_image,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ),
               ),
               Positioned(
                 bottom: 8,

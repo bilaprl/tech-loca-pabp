@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 class Event {
   final dynamic id;
   final String title;
@@ -16,6 +19,9 @@ class Event {
 
   bool isWishlisted;
 
+  final bool isBase64Image;
+  final Uint8List? base64Bytes;
+
   Event({
     required this.id,
     required this.title,
@@ -32,6 +38,8 @@ class Event {
     required this.mapsUrl,
     required this.createdAt,
     this.isWishlisted = false,
+    this.isBase64Image = false,
+    this.base64Bytes,
   });
 
   // FUNGSI UTK KONVERSI DARI JSON SUPABASE KE OBJECT EVENT (Sesuai Kolom Database Saklek)
@@ -42,36 +50,37 @@ class Event {
         ? 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?q=80&w=1000'
         : rawImg;
 
+    bool base64Check = safeImg.startsWith('data:image');
+    Uint8List? bytes;
+
+    if (base64Check) {
+      try {
+        // Membuang teks "data:image/...;base64," dan menyisakan kode aslinya
+        String base64Str = safeImg.split(',').last;
+        bytes = base64Decode(base64Str);
+      } catch (e) {
+        base64Check = false;
+      }
+    }
+
     return Event(
-      id: json['id'], // uuid NOT NULL
-      title: json['title']?.toString() ?? '', // text NOT NULL
-      category:
-          json['category']?.toString() ??
-          'Workshop IT', // text DEFAULT 'Workshop IT'
-      eo: json['eo']?.toString() ?? '', // text
-      date:
-          json['date']?.toString() ??
-          DateTime.now().toIso8601String(), // timestamp with time zone
-      location: json['location']?.toString() ?? '', // text
-      venue: json['venue']?.toString() ?? '', // text
-      // Di database: quota integer. Di model properti: int.
+      id: json['id'],
+      title: json['title']?.toString() ?? '',
+      category: json['category']?.toString() ?? 'Workshop IT',
+      eo: json['eo']?.toString() ?? '',
+      date: json['date']?.toString() ?? DateTime.now().toIso8601String(),
+      location: json['location']?.toString() ?? '',
+      venue: json['venue']?.toString() ?? '',
       quota: int.tryParse(json['quota']?.toString() ?? '0') ?? 0,
-      max:
-          int.tryParse(json['quota']?.toString() ?? '0') ??
-          0, // Diisi dari nilai quota database sebagai limit awal mobile
-      // 🌟 PERBAIKAN DI SINI: Sesuaikan nama parameter dengan deklarasi di constructor
+      max: int.tryParse(json['quota']?.toString() ?? '0') ?? 0,
       imageUrl: safeImg,
-
-      // Nama parameternya 'desc' sesuai constructor kelas, tapi key JSON dari kolom 'description'
       desc: json['description']?.toString() ?? '',
-
-      // Di database: price integer. Di model properti: String. Kita konversi ke String aman.
       price: json['price']?.toString() ?? '0',
-
-      mapsUrl: json['maps_url']?.toString() ?? '', // text
+      mapsUrl: json['maps_url']?.toString() ?? '',
       createdAt:
-          json['created_at']?.toString() ??
-          DateTime.now().toIso8601String(), // timestamp with time zone
+          json['created_at']?.toString() ?? DateTime.now().toIso8601String(),
+      isBase64Image: base64Check,
+      base64Bytes: bytes,
     );
   }
 }

@@ -1,5 +1,6 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'dart:math';
 
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _notificationsPlugin =
@@ -17,16 +18,16 @@ class NotificationService {
     const InitializationSettings initializationSettings =
         InitializationSettings(android: initializationSettingsAndroid);
 
-    // 🌟 PERBAIKAN: Menambahkan named parameter 'settings:' yang diwajibkan oleh plugin
     await _notificationsPlugin.initialize(settings: initializationSettings);
   }
 
   // FUNGSI MEMICU POP-UP NOTIFIKASI HP & MENCATAT DATA BACKEND KE HIVE CACHE
   static Future<void> showNotification({
-    required int id,
+    int id = 0,
     required String title,
     required String body,
-    String type = 'info', // Membedakan ikon (cert, ticket, info, event)
+    String type = 'info',
+    bool saveToHive = false, // Membedakan ikon (cert, ticket, info, event)
   }) async {
     const AndroidNotificationDetails androidDetails =
         AndroidNotificationDetails(
@@ -34,39 +35,42 @@ class NotificationService {
           'TechLoca Notifications',
           importance: Importance.max,
           priority: Priority.high,
+          icon: '@mipmap/ic_launcher', // Memastikan ikon aplikasi muncul
         );
 
     const NotificationDetails platformDetails = NotificationDetails(
       android: androidDetails,
     );
 
+    final int notifId = id == 0 ? Random().nextInt(100000) : id;
+
     // Memunculkan banner pop-up notifikasi sistem di HP
     await _notificationsPlugin.show(
-      id: id,
+      id: notifId,
       title: title,
       body: body,
       notificationDetails: platformDetails,
     );
 
-    final now = DateTime.now();
+    if (saveToHive) {
+      final now = DateTime.now();
+      final String formattedDate =
+          "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour}:${now.minute}";
 
-    // Format seragam dengan database: YYYY-MM-DD
-    final String formattedDate =
-        "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+      var box = Hive.box(_historyBox);
 
-    // MENGAMBIL BOX NOTIFIKASI HIVE
-    var box = Hive.box(_historyBox);
+      final Map<String, dynamic> newNotif = {
+        "id": "local-$notifId",
+        "type": type,
+        "title": title,
+        "desc": body,
+        "time": formattedDate,
+        "timestamp": now.toIso8601String(),
+        "isRead": false,
+      };
 
-    // SINKRONISASI SKEMA DATA PAYLOAD SESUAI STRUKTUR REAL BACKEND
-    final Map<String, dynamic> newNotif = {
-      "title": title,
-      "desc": body,
-      "time": formattedDate, // Format seragam: YYYY-MM-DD
-      "type": type,
-      "timestamp": now.toIso8601String(),
-    };
-
-    // Simpan ke database lokal agar bisa dibaca ValueListenableBuilder halaman notifikasi
-    await box.add(newNotif);
+      // Simpan ke database lokal agar bisa dibaca ValueListenableBuilder halaman notifikasi
+      await box.add(newNotif);
+    }
   }
 }

@@ -23,6 +23,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // FUNGSI AMBIL DATA DARI SUPABASE
+  // FUNGSI AMBIL DATA DARI SUPABASE
   Future<void> _fetchTrendingEvents() async {
     try {
       final response = await Supabase.instance.client
@@ -30,9 +31,27 @@ class _HomeScreenState extends State<HomeScreen> {
           .select()
           .order('created_at', ascending: false);
 
-      final List<Event> allEvents = (response as List)
-          .map((json) => Event.fromJson(json))
-          .toList();
+      // 🌟 PERBAIKAN 1: Ambil data wishlist milik user saat ini
+      final user = Supabase.instance.client.auth.currentUser;
+      List<String> userWishlistIds = [];
+      if (user != null) {
+        final wishlistData = await Supabase.instance.client
+            .from('wishlist')
+            .select('event_id')
+            .eq('user_id', user.id);
+        userWishlistIds = (wishlistData as List)
+            .map((w) => w['event_id'].toString())
+            .toList();
+      }
+
+      final List<Event> allEvents = (response as List).map((json) {
+        final event = Event.fromJson(json);
+        // 🌟 PERBAIKAN 1: Warnai merah jika ID event ada di tabel wishlist user
+        if (userWishlistIds.contains(event.id.toString())) {
+          event.isWishlisted = true;
+        }
+        return event;
+      }).toList();
 
       if (mounted) {
         setState(() {
@@ -48,9 +67,47 @@ class _HomeScreenState extends State<HomeScreen> {
         });
       }
     } catch (e, stacktrace) {
-      debugPrint("🚨 Error di Home Screen Fetch: $e");
-      debugPrint("🚨 Stacktrace: $stacktrace");
+      debugPrint("Error di Home Screen Fetch: $e");
+      debugPrint("Stacktrace: $stacktrace");
       if (mounted) setState(() => isLoading = false);
+    }
+  }
+
+  Future<void> _toggleWishlist(Event event) async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Silakan login terlebih dahulu')),
+      );
+      return;
+    }
+
+    // Mengubah warna UI seketika (Optimistic Update) agar aplikasi terasa cepat
+    setState(() {
+      event.isWishlisted = !event.isWishlisted;
+    });
+
+    try {
+      if (event.isWishlisted) {
+        // Insert ke tabel wishlist
+        await Supabase.instance.client.from('wishlist').insert({
+          'user_id': user.id,
+          'event_id': event.id,
+        });
+      } else {
+        // Hapus dari tabel wishlist
+        await Supabase.instance.client
+            .from('wishlist')
+            .delete()
+            .eq('user_id', user.id)
+            .eq('event_id', event.id);
+      }
+    } catch (e) {
+      // Kembalikan warna ke semula jika gagal koneksi database
+      setState(() {
+        event.isWishlisted = !event.isWishlisted;
+      });
+      debugPrint("Error toggle wishlist: $e");
     }
   }
 
@@ -322,37 +379,67 @@ class _HomeScreenState extends State<HomeScreen> {
                                       borderRadius: const BorderRadius.vertical(
                                         top: Radius.circular(30),
                                       ),
-                                      child: Image.network(
-                                        event.imageUrl,
-                                        height: 200,
-                                        width: double.infinity,
-                                        fit: BoxFit.cover,
-                                        errorBuilder:
-                                            (context, error, stackTrace) =>
-                                                Container(
-                                                  height: 200,
-                                                  color: Colors.grey[200],
-                                                  child: const Icon(
-                                                    Icons.broken_image,
+                                      child:
+                                          event.isBase64Image &&
+                                              event.base64Bytes != null
+                                          // 🌟 JIKA GAMBAR DARI WEB (BASE64)
+                                          ? Image.memory(
+                                              event.base64Bytes!,
+                                              height: 200,
+                                              width: double.infinity,
+                                              fit: BoxFit.cover,
+                                              errorBuilder:
+                                                  (
+                                                    context,
+                                                    error,
+                                                    stackTrace,
+                                                  ) => Container(
+                                                    height: 200,
+                                                    color: Colors.grey[200],
+                                                    child: const Icon(
+                                                      Icons.broken_image,
+                                                    ),
                                                   ),
-                                                ),
-                                      ),
+                                            )
+                                          // 🌟 JIKA GAMBAR DARI MOBILE (URL SUPABASE BIASA)
+                                          : Image.network(
+                                              event.imageUrl,
+                                              height: 200,
+                                              width: double.infinity,
+                                              fit: BoxFit.cover,
+                                              errorBuilder:
+                                                  (
+                                                    context,
+                                                    error,
+                                                    stackTrace,
+                                                  ) => Container(
+                                                    height: 200,
+                                                    color: Colors.grey[200],
+                                                    child: const Icon(
+                                                      Icons.broken_image,
+                                                    ),
+                                                  ),
+                                            ),
                                     ),
                                     Positioned(
                                       top: 15,
                                       left: 15,
-                                      child: CircleAvatar(
-                                        radius: 18,
-                                        backgroundColor: Colors.white
-                                            .withValues(alpha: 0.9),
-                                        child: Icon(
-                                          event.isWishlisted
-                                              ? Icons.favorite
-                                              : Icons.favorite_border,
-                                          color: event.isWishlisted
-                                              ? Colors.red
-                                              : Colors.grey,
-                                          size: 20,
+                                      // 🌟 PERBAIKAN 3: Bungkus dengan GestureDetector
+                                      child: GestureDetector(
+                                        onTap: () => _toggleWishlist(event),
+                                        child: CircleAvatar(
+                                          radius: 18,
+                                          backgroundColor: Colors.white
+                                              .withValues(alpha: 0.9),
+                                          child: Icon(
+                                            event.isWishlisted
+                                                ? Icons.favorite
+                                                : Icons.favorite_border,
+                                            color: event.isWishlisted
+                                                ? Colors.red
+                                                : Colors.grey,
+                                            size: 20,
+                                          ),
                                         ),
                                       ),
                                     ),

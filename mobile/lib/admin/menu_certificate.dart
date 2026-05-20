@@ -36,6 +36,7 @@ class _MenuCertificateAdminState extends State<MenuCertificateAdmin> {
           .from('transactions')
           .select('*, profiles(*), events(*), certificates(id, file_url)')
           .eq('status', 'confirmed')
+          .eq('is_checked_in', true)
           .order('created_at', ascending: false);
 
       final List<Map<String, dynamic>> loadedPeserta = [];
@@ -44,14 +45,15 @@ class _MenuCertificateAdminState extends State<MenuCertificateAdmin> {
       for (var item in response as List) {
         final profile = item['profiles'];
         final event = item['events'];
-        final certs = item['certificates'] as List?;
+        // 🌟 PERBAIKAN: Karena One-to-One (UNIQUE), data yang kembali dari Supabase adalah Map, bukan List
+        final certData = item['certificates'];
 
         if (profile != null && event != null) {
           final String eventTitle = event['title'] ?? 'Event';
           eventTitles.add(eventTitle.toUpperCase());
 
-          // Jika record di tabel certificates ada, maka status sudah TERKIRIM
-          bool hasCert = certs != null && certs.isNotEmpty;
+          // 🌟 PERBAIKAN: Cek jika data objek sertifikat tidak kosong di database
+          bool hasCert = certData != null;
 
           loadedPeserta.add({
             "transaction_id": item['id'],

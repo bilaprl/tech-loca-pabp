@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'dart:convert';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart'; // 🌟 TAMBAHAN: Untuk merender Google Maps interaktif
 import '../event_model.dart';
 import '../main.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class DetailEventScreen extends StatefulWidget {
   final Event event;
@@ -14,9 +16,14 @@ class DetailEventScreen extends StatefulWidget {
 
 class _DetailEventScreenState extends State<DetailEventScreen> {
   late bool isWishlisted = widget.event.isWishlisted;
+  // 🌟 PERBAIKAN 1 & 2: Buat variabel penampung agar tidak mengubah nilai 'final'
+  late int currentQuota = widget.event.quota;
+
   bool isBooked = false;
   bool isLoadingWishlist = false;
   bool isProcessingTransaction = false;
+  bool showLiveMap =
+      false; // 🌟 TAMBAHAN: Variabel status untuk memicu pergantian Gambar/Peta
 
   @override
   void initState() {
@@ -30,6 +37,13 @@ class _DetailEventScreenState extends State<DetailEventScreen> {
     if (user == null) return;
 
     try {
+      // Tarik data kuota paling baru dari database!
+      final liveEvent = await Supabase.instance.client
+          .from('events')
+          .select('quota')
+          .eq('id', widget.event.id)
+          .single();
+
       // Cek Wishlist
       final wishlist = await Supabase.instance.client
           .from('wishlist')
@@ -38,22 +52,19 @@ class _DetailEventScreenState extends State<DetailEventScreen> {
           .eq('event_id', widget.event.id)
           .maybeSingle();
 
-      // Cek Transaksi
-      final transaction = await Supabase.instance.client
-          .from('transactions')
-          .select()
-          .eq('user_id', user.id)
-          .eq('event_id', widget.event.id)
-          .maybeSingle();
-
       if (mounted) {
         setState(() {
+          // 🌟 PERBAIKAN 1 & 2: Gunakan variabel penampung 'currentQuota'
+          currentQuota = liveEvent['quota'] ?? widget.event.quota;
+
           isWishlisted = wishlist != null;
-          isBooked = transaction != null;
+          isBooked = false;
+          isLoadingWishlist = false;
         });
       }
     } catch (e) {
-      debugPrint("Error status check: $e");
+      debugPrint("Error check status: $e");
+      if (mounted) setState(() => isLoadingWishlist = false);
     }
   }
 
@@ -80,18 +91,27 @@ class _DetailEventScreenState extends State<DetailEventScreen> {
 
       setState(() => isWishlisted = !isWishlisted);
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            isWishlisted ? "Ditambahkan ke Wishlist" : "Dihapus dari Wishlist",
+      // 🌟 PERBAIKAN 4: Tambahkan mounted check sebelum memanggil SnackBar
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              isWishlisted
+                  ? "Ditambahkan ke Wishlist"
+                  : "Dihapus dari Wishlist",
+            ),
+            backgroundColor: isWishlisted
+                ? const Color(0xFF4F46E5)
+                : Colors.red,
           ),
-          backgroundColor: isWishlisted ? const Color(0xFF4F46E5) : Colors.red,
-        ),
-      );
+        );
+      }
     } catch (e) {
       debugPrint("Wishlist Error: $e");
     } finally {
-      setState(() => isLoadingWishlist = false);
+      if (mounted) {
+        setState(() => isLoadingWishlist = false);
+      }
     }
   }
 
@@ -106,16 +126,42 @@ class _DetailEventScreenState extends State<DetailEventScreen> {
       final String generatedQrString =
           "TCK-${user.id.substring(0, 5)}-${widget.event.id.toString().substring(0, 5)}-${DateTime.now().millisecondsSinceEpoch}";
 
+      // 1. Pastikan dulu kuotanya masih ada sebelum di-insert (Gunakan currentQuota)
+      if (currentQuota <= 0) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Maaf, kuota event ini sudah habis terisi!'),
+            ),
+          );
+        }
+        return;
+      }
+
+      // 2. Insert transaksi baru ke Supabase
       await Supabase.instance.client.from('transactions').insert({
         'user_id': user.id,
         'event_id': widget.event.id,
         'status': 'pending',
         'is_checked_in': false,
-        'qr_code_string': generatedQrString,
+        'qr_code_string':
+            generatedQrString, // 🌟 PERBAIKAN 3: Masukkan variabel QR ke database!
       });
 
-      setState(() => isBooked = true);
+      // 3. Potong kuota event sebanyak 1 di database Supabase
+      final int oldQuota = currentQuota;
+      await Supabase.instance.client
+          .from('events')
+          .update({'quota': oldQuota - 1})
+          .eq('id', widget.event.id);
+
       if (mounted) {
+        setState(() {
+          // 🌟 PERBAIKAN 1 & 2: Update variabel penampung layar
+          currentQuota = oldQuota - 1;
+          isBooked = true;
+        });
+
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text("Slot berhasil diamankan! Silakan cek menu Tiket."),
@@ -126,11 +172,12 @@ class _DetailEventScreenState extends State<DetailEventScreen> {
     } catch (e) {
       debugPrint("Transaction Error: $e");
     } finally {
-      setState(() => isProcessingTransaction = false);
+      if (mounted) {
+        setState(() => isProcessingTransaction = false);
+      }
     }
   }
 
-  // 4. BUKA MAPS (URL LAUNCHER)
   Future<void> _launchMaps() async {
     if (widget.event.mapsUrl.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -141,18 +188,30 @@ class _DetailEventScreenState extends State<DetailEventScreen> {
       return;
     }
 
-    final Uri url = Uri.parse(widget.event.mapsUrl.trim());
-    if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Tidak bisa membuka tautan peta")),
-      );
+    // Bersihkan link dari modifikasi output=embed jika ada, kembalikan ke url asli
+    final String cleanUrlString = widget.event.mapsUrl
+        .replaceAll('&output=embed', '')
+        .replaceAll('?output=embed', '')
+        .trim();
+
+    final Uri url = Uri.parse(cleanUrlString);
+
+    try {
+      if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Tidak bisa membuka tautan peta")),
+        );
+      }
+    } catch (e) {
+      debugPrint("Error launching maps: $e");
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final bool isSoldOut = widget.event.quota <= 0;
+    // 🌟 PERBAIKAN: Gunakan currentQuota untuk mengecek status sold out
+    final bool isSoldOut = currentQuota <= 0;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -192,7 +251,6 @@ class _DetailEventScreenState extends State<DetailEventScreen> {
                               child: _buildInfoCard(
                                 Icons.calendar_today_rounded,
                                 "TANGGAL",
-                                // 🌟 PERBAIKAN 1: Bersihkan format penanda jam ISO bawaan database SQL
                                 widget.event.date.contains('T')
                                     ? widget.event.date.split('T')[0]
                                     : widget.event.date,
@@ -337,13 +395,40 @@ class _DetailEventScreenState extends State<DetailEventScreen> {
   Widget _buildVisualHeader() {
     return Stack(
       children: [
-        Image.network(
-          widget.event.imageUrl,
-          height: 350,
-          width: double.infinity,
-          fit: BoxFit.cover,
+        widget.event.isBase64Image && widget.event.base64Bytes != null
+            ? Image.memory(
+                widget.event.base64Bytes!,
+                height: 350,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => Container(
+                  height: 350,
+                  color: Colors.grey[200],
+                  child: const Icon(
+                    Icons.image_not_supported,
+                    size: 50,
+                    color: Colors.grey,
+                  ),
+                ),
+              )
+            : Image.network(
+                widget.event.imageUrl,
+                height: 350,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => Container(
+                  height: 350,
+                  color: Colors.grey[200],
+                  child: const Icon(
+                    Icons.image_not_supported,
+                    size: 50,
+                    color: Colors.grey,
+                  ),
+                ),
+              ),
+        Positioned.fill(
+          child: IgnorePointer(child: Container(color: Colors.black12)),
         ),
-        Positioned.fill(child: Container(color: Colors.black26)),
         Positioned(
           top: 50,
           left: 20,
@@ -379,10 +464,14 @@ class _DetailEventScreenState extends State<DetailEventScreen> {
           right: 20,
           child: ElevatedButton.icon(
             onPressed: _launchMaps,
-            icon: const Icon(Icons.map_outlined, size: 18),
-            label: const Text(
-              "Lihat Peta",
-              style: TextStyle(fontWeight: FontWeight.bold),
+            // 🌟 PERBAIKAN: Ubah ikon dan teks tombol secara dinamis mengikuti status showLiveMap
+            icon: Icon(
+              showLiveMap ? Icons.image_outlined : Icons.map_outlined,
+              size: 18,
+            ),
+            label: Text(
+              showLiveMap ? "Lihat Gambar" : "Lihat Peta",
+              style: const TextStyle(fontWeight: FontWeight.bold),
             ),
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.white,
@@ -390,6 +479,7 @@ class _DetailEventScreenState extends State<DetailEventScreen> {
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
+              elevation: 4,
             ),
           ),
         ),
@@ -506,7 +596,8 @@ class _DetailEventScreenState extends State<DetailEventScreen> {
           ),
         ),
         Text(
-          isSoldOut ? "HABIS TERJUAL" : "${widget.event.quota} KURSI",
+          // 🌟 PERBAIKAN: Gunakan currentQuota agar tidak error
+          isSoldOut ? "HABIS TERJUAL" : "$currentQuota KURSI",
           style: TextStyle(
             fontSize: 11,
             fontWeight: FontWeight.w900,

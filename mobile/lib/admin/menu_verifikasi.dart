@@ -30,7 +30,7 @@ class _MenuVerifikasiAdminState extends State<MenuVerifikasiAdmin> {
       final response = await supabase
           .from('transactions')
           .select('*, profiles(*), events(*)')
-          .neq('status', 'cancelled')
+          .not('status', 'in', ['cancelled', 'failed'])
           .order('created_at', ascending: false);
 
       final List<Map<String, dynamic>> loadedPeserta = [];
@@ -56,7 +56,7 @@ class _MenuVerifikasiAdminState extends State<MenuVerifikasiAdmin> {
               : (rawDate.isNotEmpty ? rawDate : '-');
 
           loadedPeserta.add({
-            'id': item['id']?.toString() ?? '', // Transaction ID murni
+            'id': item['id']?.toString() ?? '',
             'nama': profile['full_name'] ?? 'Anonim',
             'instansi': profile['institution'] ?? 'UNIVERSITAS SILIWANGI',
             'email': profile['email'] ?? '',
@@ -68,6 +68,7 @@ class _MenuVerifikasiAdminState extends State<MenuVerifikasiAdmin> {
             'tanggal': parsedDate,
             'qr_string': item['qr_code_string'] ?? '',
             'bukti': item['payment_proof_url'] ?? '',
+            'avatar': profile['avatar_url'] ?? '', // 🌟 TAMBAHKAN BARIS INI
           });
         }
       }
@@ -580,9 +581,34 @@ class _MenuVerifikasiAdminState extends State<MenuVerifikasiAdmin> {
                             ),
                             leading: CircleAvatar(
                               backgroundColor: const Color(0xFFF1F5F9),
-                              backgroundImage: NetworkImage(
-                                "https://ui-avatars.com/api/?name=${p['nama']}&background=random",
-                              ),
+                              // 🌟 PERBAIKAN: Cek jika user punya avatar_url asli, pakai fotonya. Jika kosong, buat inisial huruf yang aman dari crash.
+                              child:
+                                  p['avatar'].toString().isNotEmpty &&
+                                      p['avatar'].toString().startsWith('http')
+                                  ? ClipRRect(
+                                      borderRadius: BorderRadius.circular(100),
+                                      child: Image.network(
+                                        p['avatar'],
+                                        width: double.infinity,
+                                        height: double.infinity,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (context, e, s) => Text(
+                                          p['nama'][0].toUpperCase(),
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    )
+                                  : Text(
+                                      p['nama'].toString().isNotEmpty
+                                          ? p['nama'][0].toUpperCase()
+                                          : '?',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Color(0xFF4F46E5),
+                                      ),
+                                    ),
                             ),
                             title: Text(
                               p['nama'],

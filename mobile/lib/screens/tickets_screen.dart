@@ -78,7 +78,9 @@ class _TicketsScreenState extends State<TicketsScreen>
             'event_data': item['events'],
           };
 
-          if (item['status'] == 'cancelled' || item['is_checked_in'] == true) {
+          if (item['status'] == 'cancelled' ||
+              item['status'] == 'failed' ||
+              item['is_checked_in'] == true) {
             historyList.add(ticketMap);
           } else {
             activeList.add(ticketMap);
@@ -104,7 +106,8 @@ class _TicketsScreenState extends State<TicketsScreen>
       if (mounted) {
         setState(() {
           activeTickets = activeList;
-          historyTickets = historyList;
+          // 🌟 PERBAIKAN: Membalikkan list riwayat agar yang paling baru dipesan/dibatalkan berada paling atas
+          historyTickets = historyList.reversed.toList();
           isLoading = false;
         });
       }
@@ -135,25 +138,60 @@ class _TicketsScreenState extends State<TicketsScreen>
     }
   }
 
+  // Fungsi Pembatalan Tiket dan Pengembalian Slot Otomatis
   Future<void> _cancelTicket(String transactionId) async {
     try {
+      // 1. Ambil data transaksi untuk mencari tahu event_id yang bersangkutan
+      final transactionData = await Supabase.instance.client
+          .from('transactions')
+          .select('event_id')
+          .eq('id', transactionId)
+          .single();
+
+      final String eventId = transactionData['event_id'];
+
+      // 2. Tarik data kuota terbaru dari event tersebut
+      final eventResponse = await Supabase.instance.client
+          .from('events')
+          .select('quota')
+          .eq('id', eventId)
+          .single();
+
+      final int currentQuota = eventResponse['quota'] ?? 0;
+
+      // 3. Ubah status transaksi tiket menjadi 'failed' (Sesuai dengan constraint check database kamu)
       await Supabase.instance.client
           .from('transactions')
-          .update({'status': 'cancelled'})
+          .update({'status': 'failed'})
           .eq('id', transactionId);
 
-      _fetchTicketsData();
+      // 4. Kembalikan 1 slot kursi ke event tersebut di tabel events
+      await Supabase.instance.client
+          .from('events')
+          .update({'quota': currentQuota + 1})
+          .eq('id', eventId);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text("Pesanan berhasil dibatalkan"),
-            backgroundColor: Colors.red,
+            content: Text(
+              'Pesanan berhasil dibatalkan. Kuota telah dikembalikan!',
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        // Refresh daftar tiket di layar
+        _fetchTicketsData();
+      }
+    } catch (e) {
+      debugPrint("Error cancel ticket: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Gagal membatalkan pesanan. Coba lagi.'),
           ),
         );
       }
-    } catch (e) {
-      debugPrint("Error Cancel Ticket: $e");
     }
   }
 
@@ -224,7 +262,10 @@ class _TicketsScreenState extends State<TicketsScreen>
                         transactionId: ticket['transaction_id'],
                         event: ticket['event'],
                         status: ticket['status'],
-                        qrString: ticket['qr_string'],
+                        // 🌟 PERBAIKAN: Trik Web - Gunakan ID Transaksi jika QR kosong
+                        qrString: ticket['qr_string'].toString().isNotEmpty
+                            ? ticket['qr_string']
+                            : ticket['transaction_id'],
                         orderDate: parsedOrderDate,
                       );
                     },
@@ -267,7 +308,10 @@ class _TicketsScreenState extends State<TicketsScreen>
                         transactionId: ticket['transaction_id'],
                         event: ticket['event'],
                         status: ticket['status'],
-                        qrString: ticket['qr_string'],
+                        // 🌟 PERBAIKAN: Trik Web - Gunakan ID Transaksi jika QR kosong
+                        qrString: ticket['qr_string'].toString().isNotEmpty
+                            ? ticket['qr_string']
+                            : ticket['transaction_id'],
                         orderDate: parsedOrderDate,
                         isHistory: true,
                       );
@@ -288,7 +332,8 @@ class _TicketsScreenState extends State<TicketsScreen>
     bool isHistory = false,
   }) {
     bool isConfirmed = status.toLowerCase() == "confirmed";
-    bool isCancelled = status.toLowerCase() == "cancelled";
+    bool isCancelled =
+        status.toLowerCase() == "cancelled" || status.toLowerCase() == "failed";
 
     return Container(
       margin: const EdgeInsets.only(bottom: 20),
@@ -320,21 +365,41 @@ class _TicketsScreenState extends State<TicketsScreen>
                 children: [
                   ClipRRect(
                     borderRadius: BorderRadius.circular(12),
-                    child: Image.network(
-                      event.imageUrl,
-                      width: 60,
-                      height: 60,
-                      fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) => Container(
-                        width: 60,
-                        height: 60,
-                        color: Colors.grey.shade200,
-                        child: const Icon(
-                          Icons.image_not_supported,
-                          color: Colors.grey,
-                        ),
-                      ),
-                    ),
+                    child: event.isBase64Image && event.base64Bytes != null
+                        // 🌟 JIKA GAMBAR DARI WEB (BASE64)
+                        ? Image.memory(
+                            event.base64Bytes!,
+                            width: 80,
+                            height: 80,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) =>
+                                Container(
+                                  width: 80,
+                                  height: 80,
+                                  color: Colors.grey[200],
+                                  child: const Icon(
+                                    Icons.image_not_supported,
+                                    color: Colors.grey,
+                                  ),
+                                ),
+                          )
+                        // 🌟 JIKA GAMBAR DARI MOBILE (URL SUPABASE BIASA)
+                        : Image.network(
+                            event.imageUrl,
+                            width: 80,
+                            height: 80,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) =>
+                                Container(
+                                  width: 80,
+                                  height: 80,
+                                  color: Colors.grey[200],
+                                  child: const Icon(
+                                    Icons.image_not_supported,
+                                    color: Colors.grey,
+                                  ),
+                                ),
+                          ),
                   ),
                   const SizedBox(width: 16),
                   Expanded(
